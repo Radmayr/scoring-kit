@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scoring-kit"
+version = "0.1.0"
+description = "Генератор Airflow DAG'ов для батч-скоринга: yaml + predictor.py -> самодостаточный DAG"
+requires-python = ">=3.9"
+dependencies = [
+    "pydantic>=2",
+    "pyyaml",
+    "pandas>=1.5",
+]
+
+[project.optional-dependencies]
+parquet = ["pyarrow"]
+dev = ["pytest", "pyarrow", "scikit-learn", "joblib", "lightgbm"]
+
+[project.scripts]
+scoring = "scoring_kit.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scoring_kit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

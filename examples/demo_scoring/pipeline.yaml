@@ -1,0 +1,48 @@
+# Пример пайплайна. Имена схем, таблиц и образа условные.
+dag_id: demo_scoring
+description: Демо-скоринг клиентов (пример для scoring-kit)
+owner: your.login
+schedule: "30 4 * * *"          # cron; время в timezone ниже
+timezone: UTC
+tags: [scoring, demo]
+gp_service: vrcl
+transport: csv                  # csv | parquet — как передаются данные между тасками
+
+wait_for:
+  tables: [sandbox.demo_features_fresh]
+  timeout_seconds: 83000
+
+source:
+  query: |
+    select *
+    from sandbox.demo_features_fresh
+  checks:
+    min_rows: 1
+    unique_key: [client_id, account_id]
+
+model:
+  mrid: [demo_tenant/demo_model/0.0.1]
+  image: registry.example/mlops/lgbm:latest
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  batch_size: 100000
+  # Порядок = порядок колонок при обучении
+  features: [segment, bal_avg_3m, dpd_sum_12m, reason_cd, debt_sum, refuse_flg, req_cnt_3m, open_accnt_cnt]
+  cat_features: [segment, reason_cd, refuse_flg]
+  num_dtype: float32            # как в make_lgbm_ready при обучении
+  cat_as: category
+  score_column: score
+  score_range: [0, 1]
+
+sinks:
+  - table: sandbox.demo_scores_fresh
+    mode: replace
+    columns:
+      client_id: bigint
+      account_id: bigint
+      report_dt: date
+      segment: varchar
+      reason_cd: int
+      refuse_flg: int
+      score: numeric
+    harmonize: true
+    actualize: true
