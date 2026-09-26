@@ -44,7 +44,15 @@ def _call(target: str, cls: str, kwargs: dict, indent: int) -> str:
 def render_pipeline(pipeline: Pipeline, predictor_source: str, source_name: str = "") -> str:
     p = pipeline
     data = p.data_file
-    required = list(dict.fromkeys(p.model.features + p.source.checks.unique_key))
+    # Всё, что должно прийти из выборки: фичи, ключ и колонки приёмников, которые predict не создаёт.
+    # Проверка на входе: иначе ошибка о недостающей колонке всплывёт только после скоринга, на записи.
+    passthrough = [
+        c
+        for s in p.sinks
+        for c in s.columns
+        if c != p.model.score_column and c not in p.model.output_columns
+    ]
+    required = list(dict.fromkeys(p.model.features + p.source.checks.unique_key + passthrough))
 
     read_cb = _func(
         f"{READ_TASK}_callback",

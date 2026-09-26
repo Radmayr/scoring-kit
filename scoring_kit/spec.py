@@ -90,6 +90,8 @@ class Model(_Strict):
     score_column: str = "score"
     # null — не проверять диапазон скора.
     score_range: Optional[tuple[float, float]] = (0.0, 1.0)
+    # Колонки приёмников (кроме score_column), которые добавляет сам predict: их не ищем во входной выборке.
+    output_columns: list[str] = []
 
     @field_validator("mrid", mode="before")
     @classmethod
@@ -110,6 +112,7 @@ class Model(_Strict):
     @model_validator(mode="after")
     def _cats_subset(self):
         _check_idents(self.cat_features, "model.cat_features")
+        _check_idents(self.output_columns, "model.output_columns")
         extra = [c for c in self.cat_features if c not in self.features]
         if extra:
             raise ValueError(f"model.cat_features не входят в features: {extra}")

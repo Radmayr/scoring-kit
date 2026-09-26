@@ -71,3 +71,20 @@ def test_predictor_as_operator_sees_it():
     assert cls.__name__ == "Predictor"
     assert cls.__bases__ == (object,)
     assert cls.features[0] == "segment"
+
+
+def test_sink_column_missing_in_source_stops_at_read(tmp_path, score_frame, model_path):
+    """Колонка приёмника, которой нет в выборке, ловится на чтении, а не после скоринга."""
+    path = tmp_path / "nodate.csv"
+    score_frame.drop(columns=["report_dt"]).to_csv(path, index=False)
+    with pytest.raises(ValueError, match="report_dt"):
+        run_debug(DEMO, path, [model_path], tmp_path / "out")
+
+
+def test_output_columns_are_not_required_in_source(tmp_path, data_csv, model_path, score_frame):
+    d = make_dir(tmp_path, model__output_columns=["report_dt"])
+    path = tmp_path / "nodate2.csv"
+    score_frame.drop(columns=["report_dt"]).to_csv(path, index=False)
+    # предиктор report_dt не создаёт -> упадёт уже на записи, но чтение проходит
+    with pytest.raises(ValueError, match="для записи нет колонок"):
+        run_debug(d, path, [model_path], tmp_path / "out")
