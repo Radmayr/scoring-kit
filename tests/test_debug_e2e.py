@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scoring_kit.debug import run_debug
+from scoring_kit.debug import operator_predictor, run_debug
+from scoring_kit.render import render_dir
 from tests.conftest import CAT_FEATURES, DEMO, FEATURES
 from tests.legacy import legacy_scores
 from tests.test_spec import make_dir
@@ -18,10 +19,10 @@ def data_csv(tmp_path, score_frame):
     return path
 
 
-@pytest.mark.parametrize("transport, batch_size", [("csv", 1000), ("csv", 100000), ("parquet", 700)])
-def test_scores_match_legacy_pipeline(tmp_path, data_csv, model_path, transport, batch_size):
+@pytest.mark.parametrize("batch_size", [700, 1000, 100000])
+def test_scores_match_legacy_pipeline(tmp_path, data_csv, model_path, batch_size):
     """Главный критерий приёмки: скоры совпадают со старым кодом бит в бит."""
-    d = make_dir(tmp_path, transport=transport, model__batch_size=batch_size)
+    d = make_dir(tmp_path, model__batch_size=batch_size)
     result = run_debug(d, data_csv, [model_path], tmp_path / "out")
 
     model = joblib.load(model_path)
@@ -61,3 +62,12 @@ def test_missing_feature_stops_at_read(tmp_path, score_frame, model_path):
     score_frame.drop(columns=["debt_sum"]).to_csv(path, index=False)
     with pytest.raises(ValueError, match="debt_sum"):
         run_debug(DEMO, path, [model_path], tmp_path / "out")
+
+
+def test_predictor_as_operator_sees_it():
+    """BatchInferenceOperator вырезает "BasePredictor" и переименовывает класс; в predict.py нет имён модуля."""
+    _, code = render_dir(DEMO)
+    cls = operator_predictor(code)
+    assert cls.__name__ == "Predictor"
+    assert cls.__bases__ == (object,)
+    assert cls.features[0] == "segment"

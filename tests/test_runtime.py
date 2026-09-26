@@ -1,3 +1,4 @@
+import datetime as dt
 import decimal
 
 import numpy as np
@@ -107,7 +108,7 @@ def test_conform_to_columns():
     out = rt.sk_conform_to_columns(df, {"id": "bigint", "dt": "date", "s": "varchar", "score": "numeric"})
     assert list(out.columns) == ["id", "dt", "s", "score"]
     assert str(out["id"].dtype) == "Int64" and out["id"][0] == 10_000_000_000
-    assert out["dt"].dt.day.tolist() == [1, 2]
+    assert out["dt"].tolist() == [dt.date(2026, 9, 1), dt.date(2026, 9, 2)]
     assert out["score"].tolist() == [0.5, 0.25]
 
 

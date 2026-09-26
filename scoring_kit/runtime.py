@@ -188,6 +188,12 @@ def sk_conform_to_columns(df, columns_types):
                 raise ValueError(
                     f"[scoring-kit] колонка {c} ({sql_type}): не даты {list(s[broken].astype(str).unique()[:5])}"
                 )
-            out[c] = parsed.dt.normalize() if base == "date" else parsed
+            if base == "date":
+                # datetime.date -> date32 в stg: колонка получится date, а вставка в varchar даст '2026-09-01'.
+                out[c] = pd.Series(
+                    [d.date() if pd.notna(d) else None for d in parsed], index=out.index, dtype=object
+                )
+            else:
+                out[c] = parsed
     print(f"[scoring-kit] к записи {len(out)} строк, колонки: {list(out.columns)}")
     return out

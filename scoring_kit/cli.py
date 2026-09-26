@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("debug", help="локально прогнать чтение -> инференс -> подготовку записи")
     p.add_argument("dir")
-    p.add_argument("--data", required=True, help="выборка (csv/parquet) вместо запроса к Greenplum")
+    p.add_argument("--data", required=True, help="выборка (csv) вместо запроса к Greenplum")
     p.add_argument("--model", required=True, action="append", help="путь к модели; повторить для нескольких mrid")
     p.add_argument("--out", default="debug_out")
     p.add_argument("--limit", type=int)

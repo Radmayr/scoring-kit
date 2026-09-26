@@ -186,8 +186,6 @@ class Pipeline(_Strict):
     tags: list[str] = []
     gp_service: str
     gp_mode: str = "dal"
-    # Формат файлов между тасками. csv работает точно; parquet — после проверки оператора.
-    transport: Literal["csv", "parquet"] = "csv"
     time_limit: str = DEFAULT_TIME_LIMIT
     retries: int = Field(default=1, ge=0)
     retry_delay_minutes: int = Field(default=10, ge=0)
@@ -218,7 +216,8 @@ class Pipeline(_Strict):
 
     @property
     def data_file(self) -> str:
-        return f"data.{self.transport}"
+        # BatchInferenceOperator читает вход только через pd.read_csv, поэтому между тасками всегда csv.
+        return "data.csv"
 
     def as_shadow(self) -> "Pipeline":
         """Копия для теневого прогона: свой dag_id и таблицы с суффиксом _shadow.

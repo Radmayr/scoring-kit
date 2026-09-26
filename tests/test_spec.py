@@ -52,6 +52,7 @@ def test_column_types_are_normalized(tmp_path):
         ({"sinks__0__table": "Sandbox.X"}, "schema.table"),
         ({"model__features": ["a", "a"]}, "повторяются"),
         ({"model__unknown_field": 1}, "unknown_field"),
+        ({"transport": "parquet"}, "transport"),
         ({"owner": ...}, "owner"),
         ({"dag_id": "bad id"}, "dag_id"),
         ({"source__query": "   "}, "пустой"),

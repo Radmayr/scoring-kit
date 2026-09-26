@@ -6,7 +6,6 @@ schedule: "30 4 * * *"          # cron; время в timezone ниже
 timezone: UTC
 tags: [scoring, demo]
 gp_service: vrcl
-transport: csv                  # csv | parquet — как передаются данные между тасками
 
 wait_for:
   tables: [sandbox.demo_features_fresh]

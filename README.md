@@ -25,7 +25,6 @@ wait_source ─► read_source ─► inference ─► write_<table>: stg ─►
 
 ```bash
 pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git"
-# parquet между тасками (опционально): pip install "scoring-kit[parquet] @ git+..."
 ```
 
 ## Процесс
@@ -63,7 +62,7 @@ class Predictor(BasePredictor):
 
 ### 3. Локальная отладка
 
-Выборку выгрузите из Greenplum в csv/parquet (например, `select ... limit 100000`), модель — из
+Выборку выгрузите из Greenplum в csv (например, `select ... limit 100000`), модель — из
 Model Registry.
 
 ```bash
@@ -112,7 +111,6 @@ scoring compare-sql pipelines/my_model      # печатает SQL; ключ —
 |---|---|---|
 | `dag_id`, `owner`, `gp_service` | — | обязательные |
 | `schedule`, `timezone` | `null`, `UTC` | cron и его часовой пояс |
-| `transport` | `csv` | формат файлов между тасками: `csv` \| `parquet` |
 | `time_limit`, `retries`, `retry_delay_minutes` | `7d`, `1`, `10` | для всех тасков; сенсор не перезапускается |
 | `wait_for.tables`, `.timeout_seconds` | — , `83000` | сенсор актуализации; без блока сенсора нет |
 | `source.query` | — | SQL выборки |
@@ -149,12 +147,28 @@ scoring compare-sql pipelines/my_model      # печатает SQL; ключ —
 `airflow_provider_*` и версию Greenplum. Только чтение. Опубликовать, запустить вручную,
 прочитать логи тасков `introspect` и `gp_version`.
 
+## Что известно о платформе (по исходникам провайдеров с инстанса)
+
+- **BatchInferenceOperator** читает вход только `pd.read_csv(f, chunksize=batch_size)`, поэтому
+  между тасками всегда csv, а типы колонок определяются в каждом батче заново. Именно для этого
+  нужен контракт `features`/`cat_features`.
+- Из класса предиктора оператор берёт `inspect.getsource`, вырезает подстроку `BasePredictor`,
+  переименовывает класс в `Predictor` и кладёт в `predict.py` без имён уровня модуля. Поэтому
+  импорты должны быть внутри методов (генератор делает это сам), а `scoring debug` запускает класс
+  ровно в таком виде.
+- Job инференса живёт не дольше **2 часов** (`time_limit="2h"` зашит в оператор), `requirements`
+  ставятся через `pip install` при каждом запуске.
+- `DataframeToGreenplumOperator` в `mode="dal"` игнорирует `columns_types`: типы колонок
+  определяет `dal.put_df` по dtype датафрейма. Поэтому `scoring-kit` приводит типы сам, а даты
+  отдаёт как `datetime.date`.
+- `GreenplumExecuteOperator` в dal-режиме выполняет `dal.execute(query)`; поддержка нескольких
+  операторов (`begin; ...; commit;`) в одном вызове проверяется первым теневым прогоном.
+- Airflow 2.10.5, Python 3.11, pandas 2.1.4 в подах тасков; Greenplum 6.27 (PostgreSQL 9.4).
+
 ## Открытые вопросы
 
-- Как `BatchInferenceOperator` читает вход (формат по расширению? батчи через `chunksize`?) и
-  передаёт класс в под — от этого зависит, можно ли включать `transport: parquet`.
 - Что публикует `mlc airflow publish` — все `.py` из текущей папки или конкретный файл.
-- Поддерживает ли `time_limit` значения меньше `7d` и какие ещё есть flavor'ы.
+- Работает ли `begin; truncate; insert; commit;` одним вызовом `dal.execute`.
 
 ## Разработка
 

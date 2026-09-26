@@ -153,12 +153,6 @@ def test_no_wait_and_several_sinks(tmp_path):
     assert ups["write_demo_scores_hist_stg"] == {"inference"}
 
 
-def test_parquet_transport(tmp_path):
-    _, code = render_dir(make_dir(tmp_path, transport="parquet"))
-    dag = load_dag(code)
-    assert dag.tasks["inference"].kwargs["input_df_path"] == "/work/input/data.parquet"
-
-
 def test_shadow_render():
     pipeline, code = render_dir(DEMO, shadow=True)
     dag = load_dag(code)

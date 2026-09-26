@@ -8,16 +8,18 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import os
 import shutil
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
 import pandas as pd
 
-from scoring_kit.render import INFERENCE_TASK, READ_TASK, render_dir
+from scoring_kit.render import INFERENCE_TASK, PREDICTOR_CLASS, READ_TASK, render_dir
 from scoring_kit.stubs import load_dag
 from scoring_kit.sql import load_sql
 
@@ -47,6 +49,22 @@ def _read_any(path: Path) -> pd.DataFrame:
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
     return pd.read_csv(path, low_memory=False)
+
+
+def operator_predictor(code: str, class_name: str = PREDICTOR_CLASS) -> type:
+    """Класс предиктора в том виде, в котором его получает BatchInferenceOperator.
+
+    Оператор берёт inspect.getsource(класса), вырезает подстроку "BasePredictor" и
+    переименовывает класс в Predictor; в поде он лежит в predict.py без единого
+    имени уровня модуля. Воспроизводим это дословно (см. исходник оператора).
+    """
+    tree = ast.parse(code)
+    node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name)
+    source = textwrap.dedent(ast.get_source_segment(code, node))
+    source = source.replace("BasePredictor", "").replace(class_name, "Predictor")
+    namespace: dict = {}
+    exec(compile(source, "predict.py", "exec"), namespace)
+    return namespace["Predictor"]
 
 
 def _local(root: Path, work_path: str) -> Path:
@@ -80,21 +98,15 @@ def run_debug(
 
     # 2. inference: как BatchInferenceOperator — setup один раз, predict по батчам.
     op = dag.tasks[INFERENCE_TASK]
-    predictor = op.kwargs["predict_py"]()
+    predictor = operator_predictor(code)()
     predictor.setup([str(p) for p in model_paths])
     batch_size = op.kwargs["batch_size"]
-    if read_output.suffix == ".csv":
-        batches = pd.read_csv(read_output, chunksize=batch_size, low_memory=False)
-    else:
-        full = pd.read_parquet(read_output)
-        batches = (full.iloc[i : i + batch_size] for i in range(0, len(full), batch_size))
-    scored = pd.concat([predictor.predict(b.reset_index(drop=True)) for b in batches], ignore_index=True)
+    # run.py оператора: pd.read_csv(f, chunksize=batch_size) — типы определяются в каждом чанке отдельно.
+    batches = pd.read_csv(read_output, chunksize=batch_size)
+    scored = pd.concat([predictor.predict(b) for b in batches], ignore_index=True)
     inf_output = _local(out_dir / INFERENCE_TASK, f"/work/output/{data}")
     inf_output.parent.mkdir(parents=True, exist_ok=True)
-    if inf_output.suffix == ".parquet":
-        scored.to_parquet(inf_output, index=False)
-    else:
-        scored.to_csv(inf_output, index=False)
+    scored.to_csv(inf_output, index=False)
 
     # 3. write_*: колбэк читает выход инференса и готовит df для stg-таблицы.
     result = DebugResult(dag_code=code, scored=scored)
