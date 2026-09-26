@@ -24,8 +24,11 @@ wait_source ─► read_source ─► inference ─► write_<table>: stg ─►
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.2.0"
 ```
+
+Всегда закрепляйте версию (тег `@v0.2.0`): фреймворк меняется, и незакреплённая установка сломает
+чужие пайплайны при выходе новой версии.
 
 ## Процесс
 
@@ -174,6 +177,41 @@ scoring compare-sql pipelines/my_model      # печатает SQL; ключ —
 
 - Удаляет ли `mlc airflow publish` с инстанса DAG'и, которых нет в публикуемом наборе (с `--prefixes` и без).
 - Работает ли `begin; truncate; insert; commit;` одним вызовом `dal.execute`.
+
+## Командная работа в GitLab
+
+Два репозитория:
+
+| Репозиторий | Что лежит | Кто меняет |
+|---|---|---|
+| `scoring-kit` (этот) | фреймворк: генератор, проверки, CLI | 1–2 человека, через merge request |
+| `scoring-pipelines` | `pipelines/<имя>/{pipeline.yaml, predictor.py}` для каждой модели | все аналитики |
+
+Пайплайны ставят фреймворк по закреплённой версии (`requirements.txt` в `scoring-pipelines`). Так
+изменение фреймворка никогда не ломает боевые скоринги неожиданно: сначала новая версия, потом
+осознанное обновление тега в `requirements.txt` через merge request.
+
+**Перенос из GitHub в GitLab:**
+
+```bash
+git remote add gitlab https://<gitlab>/<group>/scoring-kit.git
+git push gitlab main --tags
+```
+
+**Доступ к установке.** Варианты (выберите, что разрешено политикой):
+- SSH: `pip install "scoring-kit @ git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.2.0"` — у каждого свой ключ;
+- deploy token (Settings → Repository → Deploy tokens, право `read_repository`):
+  `git+https://<user>:<token>@<gitlab>/<group>/scoring-kit.git@v0.2.0`;
+- в CI другого проекта — `CI_JOB_TOKEN` (в `scoring-kit` разрешить доступ: Settings → CI/CD → Job token permissions).
+
+Если во внутренней сети есть pip-индекс (Artifactory/Nexus), удобнее опубликовать туда wheel
+(`pip wheel . --no-deps`) и ставить обычным `pip install scoring-kit==0.2.0` без токенов в командах.
+
+**Выпуск новой версии фреймворка:**
+1. Изменения через merge request, CI (`.gitlab-ci.yml`) гоняет тесты на версиях из подов и на свежих.
+2. Поднять `version` в `pyproject.toml` и `scoring_kit/__init__.py`, влить в `main`.
+3. `git tag v0.3.0 && git push --tags`.
+4. В `scoring-pipelines` поднять тег в `requirements.txt` отдельным merge request'ом.
 
 ## Разработка
 

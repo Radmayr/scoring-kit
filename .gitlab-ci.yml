@@ -1,0 +1,24 @@
+# Шаблон CI для GitLab: тесты фреймворка на двух наборах версий.
+# Образ и pip-индекс подставьте свои (внутренний прокси, если наружу ходить нельзя).
+stages: [test]
+
+.test: &test
+  stage: test
+  image: python:3.10
+  script:
+    - pip install -e ".[dev]" ${EXTRA_PIP}
+    - python -m pytest -q
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# Версии, которые стоят в подах Airflow (pandas 2.1.4, numpy 1.26.4, lightgbm 3.3.5)
+test-platform-versions:
+  <<: *test
+  variables:
+    EXTRA_PIP: "pandas==2.1.4 numpy==1.26.4 lightgbm==3.3.5"
+
+# Свежие версии зависимостей
+test-latest:
+  <<: *test
