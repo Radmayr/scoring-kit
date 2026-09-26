@@ -86,8 +86,16 @@ create table usr_coll.my_scores_fresh_shadow (like usr_coll.my_scores_fresh);
 
 ```bash
 scoring render pipelines/my_model --shadow -o build/dags   # -> build/dags/my_model_shadow.py
-# публикация на тестовый инстанс (см. «Открытые вопросы»)
-mlc airflow publish -p collection coll-models-test
+```
+
+Публикация: `mlc` выкладывает папку, а `--prefixes` ограничивает набор файлов. Вывод `scoring render`
+(`build/dags/<dag_id>.py`) ложится в ту структуру, которую ждёт инстанс (`dags/<файл>.py`):
+
+```bash
+# сначала посмотреть, что уйдёт (ничего не публикует)
+mlc airflow publish coll-models-test -p <проект> -i build --prefixes dags/my_model_shadow.py --check
+# затем то же без --check
+mlc airflow publish coll-models-test -p <проект> -i build --prefixes dags/my_model_shadow.py
 ```
 
 После прогона обоих DAG'ов сверка:
@@ -167,7 +175,7 @@ scoring compare-sql pipelines/my_model      # печатает SQL; ключ —
 
 ## Открытые вопросы
 
-- Что публикует `mlc airflow publish` — все `.py` из текущей папки или конкретный файл.
+- Удаляет ли `mlc airflow publish` с инстанса DAG'и, которых нет в публикуемом наборе (с `--prefixes` и без).
 - Работает ли `begin; truncate; insert; commit;` одним вызовом `dal.execute`.
 
 ## Разработка
