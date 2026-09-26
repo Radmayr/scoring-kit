@@ -29,7 +29,8 @@ def load_sql(sink: Sink, pipeline: Pipeline) -> str:
     extra = service_columns(sink, pipeline)
     target_cols = list(sink.columns) + [name for name, _, _ in extra]
     select_exprs = list(sink.columns) + [expr for _, _, expr in extra]
-    parts = ["begin;"]
+    # Целевая таблица создаётся при первом запуске по sinks[].columns; существующую не трогаем.
+    parts = ["begin;", ddl(sink, pipeline, if_not_exists=True)]
     if sink.mode == "replace":
         parts.append(f"truncate table {sink.table};")
     parts.append(
@@ -49,8 +50,8 @@ def actualize_sql(sink: Sink) -> str:
     return f"select public.ulabs_actualize('{sink.table}')"
 
 
-def ddl(sink: Sink, pipeline: Pipeline) -> str:
-    """create table для целевой таблицы — выполнить один раз руками."""
+def ddl(sink: Sink, pipeline: Pipeline, if_not_exists: bool = False) -> str:
+    """create table для целевой таблицы (DAG выполняет его сам с if not exists)."""
     cols = list(sink.columns.items()) + [(n, t) for n, t, _ in service_columns(sink, pipeline)]
     width = max(len(n) for n, _ in cols)
     body = ",\n".join(f"    {n.ljust(width)} {t}" for n, t in cols)
