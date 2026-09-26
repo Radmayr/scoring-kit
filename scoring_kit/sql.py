@@ -60,7 +60,8 @@ def ddl(sink: Sink, pipeline: Pipeline, if_not_exists: bool = False) -> str:
         if sink.distributed_by
         else "distributed randomly"
     )
-    return f"create table {sink.table} (\n{body}\n)\n{dist};"
+    exists = "if not exists " if if_not_exists else ""
+    return f"create table {exists}{sink.table} (\n{body}\n)\n{dist};"
 
 
 def compare_sql(prod_table: str, shadow_table: str, key: list[str], score_column: str, tol: float) -> str:

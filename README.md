@@ -77,12 +77,9 @@ scoring debug pipelines/my_model --data sample.csv --model model.pkl
 
 Новый DAG пишет в `<table>_shadow`, старый продолжает работать.
 
-```sql
--- один раз: теневая таблица с той же структурой, что и боевая
-create table usr_coll.my_scores_fresh_shadow (like usr_coll.my_scores_fresh);
-```
-
-Для новой таблицы, которой ещё нет, DDL печатает `scoring ddl pipelines/my_model [--shadow]`.
+Теневая (как и любая целевая) таблица создаётся самим DAG'ом при первом запуске:
+`create table if not exists` по `sinks[].columns`, существующие таблицы не трогаются. Руками ничего
+создавать не нужно. Тот же DDL печатает `scoring ddl pipelines/my_model [--shadow]`.
 
 ```bash
 scoring render pipelines/my_model --shadow -o build/dags   # -> build/dags/my_model_shadow.py

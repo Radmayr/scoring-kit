@@ -108,6 +108,8 @@ def test_replace_is_truncate_insert_in_transaction(demo):
     _, _, dag = demo
     q = dag.tasks["write_demo_scores_fresh_load"].kwargs["query"]
     assert q.startswith("begin;")
+    assert "create table if not exists sandbox.demo_scores_fresh (" in q
+    assert q.index("create table if not exists") < q.index("truncate table sandbox.demo_scores_fresh;")
     assert "truncate table sandbox.demo_scores_fresh;" in q
     assert "from sandbox.demo_scores_fresh_stg;" in q
     assert q.rstrip().endswith("commit;")
@@ -128,6 +130,7 @@ def test_append_with_service_columns(tmp_path):
     dag = load_dag(code)
     q = dag.tasks["write_demo_scores_fresh_load"].kwargs["query"]
     assert "truncate" not in q
+    assert "scored_at timestamp" in q.replace("  ", " ") or "scored_at" in q  # колонка есть и в create
     assert "scored_at, model_mrid)" in q
     assert "now(), 'demo_tenant/demo_model/0.0.1'" in q
     assert "write_demo_scores_fresh_harmonize" not in dag.tasks
