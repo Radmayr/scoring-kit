@@ -1,0 +1,477 @@
+<title>Фабрика скоринга</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Схема для инженера: полосы-слои сверху вниз, внутри — блоки-таски слева направо.
+   Цвет кодирует роль блока: наш слой, платформа, данные, ожидание, проверка. */
+:root {
+  --bg: #F3F5F2;
+  --surface: #FFFFFF;
+  --ink: #18212B;
+  --muted: #5A6572;
+  --line: #D6DBD3;
+  --ours: #2453B8;
+  --platform: #1C7F55;
+  --data: #A86A12;
+  --wait: #6F52A0;
+  --check: #B4421A;
+  --code-bg: #EEF1EC;
+  --font-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --font-body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10151B; --surface: #18202A; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+    --ours: #82A6FF; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60;
+    --code-bg: #121921; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10151B; --surface: #18202A; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+  --ours: #82A6FF; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60;
+  --code-bg: #121921; color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--font-body); }
+.page { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 56px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font: 700 clamp(26px, 4.4vw, 40px)/1.15 var(--font-display); letter-spacing: -0.01em; }
+h2 { font: 600 22px/1.3 var(--font-body); }
+h3 { font: 600 16px/1.35 var(--font-body); }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+.lead { color: var(--muted); font-size: 17px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 20px; min-width: 0; }
+header { display: grid; gap: 14px; }
+
+/* Легенда */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* Общая схема: полосы */
+.lanes { display: grid; gap: 0; }
+.lane { display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: stretch; }
+.lane-label { padding-top: 14px; display: grid; gap: 4px; align-content: start; }
+.lane-label b { font-weight: 600; }
+.lane-label small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.lane-body { display: flex; flex-wrap: wrap; gap: 10px; padding-block: 10px; border-left: 2px dashed var(--line); padding-left: 16px; min-width: 0; }
+.down { grid-column: 2; color: var(--muted); font-size: 18px; line-height: 1; padding: 0 0 0 9px; }
+
+.node { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 4px; min-width: 0; flex: 1 1 180px; max-width: 320px; }
+.node .kind { font: 600 11px/1 var(--font-body); letter-spacing: 0.07em; text-transform: uppercase; }
+.node .name { font-weight: 600; font-size: 14px; }
+.node .what { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.node .op { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.k-ours .kind { color: var(--ours); }   .k-ours { border-color: color-mix(in srgb, var(--ours) 45%, var(--line)); }
+.k-plat .kind { color: var(--platform); } .k-plat { border-color: color-mix(in srgb, var(--platform) 45%, var(--line)); }
+.k-data .kind { color: var(--data); }   .k-data { border-color: color-mix(in srgb, var(--data) 45%, var(--line)); }
+.k-wait .kind { color: var(--wait); }   .k-wait { border-color: color-mix(in srgb, var(--wait) 45%, var(--line)); }
+.k-check .kind { color: var(--check); } .k-check { border-color: color-mix(in srgb, var(--check) 45%, var(--line)); }
+
+/* Фабрика внутри */
+.factory { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: grid; gap: 14px; }
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.flow .node { flex: 1 1 150px; max-width: none; }
+.arrow { align-self: center; color: var(--muted); font-size: 18px; flex: 0 0 auto; }
+.note { color: var(--muted); font-size: 13.5px; max-width: 80ch; }
+
+/* Сценарии */
+.recipes { display: grid; gap: 18px; }
+.recipe { display: grid; gap: 10px; padding-block: 16px; border-top: 1px solid var(--line); }
+.recipe-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.recipe-head .mono { color: var(--ours); }
+.recipe-head small { color: var(--muted); }
+.recipe .flow .node { flex: 1 1 130px; padding: 8px 10px; }
+.recipe .node .name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; overflow-wrap: anywhere; }
+
+/* Обвязка */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; font-size: 13.5px; }
+.chip b { font-weight: 600; }
+
+/* План внедрения */
+.phases { display: grid; gap: 28px; counter-reset: phase; }
+.phase { display: grid; grid-template-columns: 56px 1fr; gap: 16px; }
+.phase-num { font: 700 28px/1 var(--font-display); color: var(--ours); padding-top: 2px; }
+.phase-body { display: grid; gap: 12px; min-width: 0; }
+.phase-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 80ch; }
+.steps li::marker { color: var(--muted); }
+.done-when { font-size: 13.5px; border-left: 3px solid var(--platform); padding: 4px 0 4px 12px; color: var(--ink); max-width: 80ch; }
+.done-when b { color: var(--platform); }
+
+.cmd { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.cmd pre { margin: 0; padding: 12px 14px; padding-right: 92px; overflow-x: auto; font: 12.5px/1.6 var(--font-mono); color: var(--ink); }
+.cmd pre .c { color: var(--muted); }
+.copy { position: absolute; top: 8px; right: 8px; font: 500 12px/1 var(--font-body); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.copy:hover { border-color: var(--ours); }
+.copy:focus-visible, a:focus-visible { outline: 2px solid var(--ours); outline-offset: 2px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+
+.warn { border: 1px solid color-mix(in srgb, var(--check) 50%, var(--line)); background: color-mix(in srgb, var(--check) 7%, var(--surface)); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; }
+.warn h3 { color: var(--check); }
+
+a { color: var(--ours); }
+
+@media (max-width: 720px) {
+  .lane { grid-template-columns: 1fr; gap: 0; }
+  .lane-label { padding-top: 12px; }
+  .down { grid-column: 1; }
+  .phase { grid-template-columns: 1fr; gap: 6px; }
+  .node { max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+
+<header>
+  <span class="eyebrow">scoring-kit 0.3 · батч-инференс на Airflow</span>
+  <h1>Фабрика скоринга</h1>
+  <p class="lead">Аналитик описывает процесс в одном файле <code>pipeline.yaml</code>. Фабрика проверяет описание и собирает из него DAG на операторах платформы. Ниже — из чего состоит система, какие сценарии она покрывает и как поднять её на работе.</p>
+  <div class="legend" aria-label="Легенда цветов">
+    <span><i style="background:var(--ours)"></i>наш слой</span>
+    <span><i style="background:var(--platform)"></i>операторы и сервисы платформы</span>
+    <span><i style="background:var(--data)"></i>данные и модели</span>
+    <span><i style="background:var(--wait)"></i>ожидание</span>
+    <span><i style="background:var(--check)"></i>проверка</span>
+  </div>
+</header>
+
+<!-- ============================================================ 1 -->
+<section aria-labelledby="s1">
+  <h2 id="s1">Общая схема</h2>
+  <p class="note">Сверху вниз — путь от правки в конфиге до скоров в витрине. Всё, что синее, принадлежит команде и лежит в git; зелёное — платформа, которую мы не трогаем.</p>
+
+  <div class="lanes">
+    <div class="lane">
+      <div class="lane-label"><b>Люди</b><small>аналитики, владельцы моделей</small></div>
+      <div class="lane-body">
+        <div class="node k-ours"><span class="kind">конфиг</span><span class="name">pipeline.yaml</span><span class="what">что читать, какие модели, куда писать, когда, кого будить при падении</span></div>
+        <div class="node k-ours"><span class="kind">редко</span><span class="name">predictor.py</span><span class="what">только для нестандартной логики; бустингам не нужен</span></div>
+        <div class="node k-ours"><span class="kind">помощник</span><span class="name">агент DeepSeek</span><span class="what">заполняет yaml по описанию; результат проверяет <code>scoring validate</code></span></div>
+      </div>
+      <div class="down" aria-hidden="true">↓</div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label"><b>GitLab</b><small>единственный источник правды</small></div>
+      <div class="lane-body">
+        <div class="node k-ours"><span class="kind">репозиторий</span><span class="name">scoring-pipelines</span><span class="what">папка на процесс, <code>CATALOG.md</code>, ручные DAG'и, версия фабрики в <code>requirements.txt</code></span></div>
+        <div class="node k-ours"><span class="kind">репозиторий</span><span class="name">scoring-kit</span><span class="what">сама фабрика: рецепты, блоки, проверки, CLI. Меняется редко, по тегам версий</span></div>
+      </div>
+      <div class="down" aria-hidden="true">↓</div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label"><b>CI</b><small>на каждый merge request и кнопкой деплоя</small></div>
+      <div class="lane-body">
+        <div class="node k-check"><span class="kind">проверка</span><span class="name">validate</span><span class="what">поля, типы, колонки по всему графу, предиктор</span></div>
+        <div class="node k-ours"><span class="kind">сборка</span><span class="name">render + catalog</span><span class="what">DAG'и (боевые и теневые) и каталог процессов</span></div>
+        <div class="node k-plat"><span class="kind">публикация</span><span class="name">mlc airflow publish</span><span class="what">полный набор DAG'ов из одной папки, под сервисной учёткой</span></div>
+      </div>
+      <div class="down" aria-hidden="true">↓</div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label"><b>Airflow</b><small>инстанс команды (тест / прод)</small></div>
+      <div class="lane-body">
+        <div class="node k-plat"><span class="kind">DAG'и фабрики</span><span class="name">s3sync/dags/</span><span class="what">по одному на процесс; теги, владелец, документация прямо в UI</span></div>
+        <div class="node k-plat"><span class="kind">старый инструмент</span><span class="name">s3sync/piper/</span><span class="what">не трогаем; переносим процессы до его отключения</span></div>
+        <div class="node k-check"><span class="kind">алерты</span><span class="name">TiMeNotifier</span><span class="what">сообщение в канал при падении любого таска</span></div>
+      </div>
+      <div class="down" aria-hidden="true">↓</div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label"><b>Исполнение</b><small>где реально считается</small></div>
+      <div class="lane-body">
+        <div class="node k-plat"><span class="kind">движок gp</span><span class="name">ML Core job</span><span class="what">pandas по батчам; лимит 2 часа на job</span><span class="op">BatchInferenceOperator</span></div>
+        <div class="node k-plat"><span class="kind">движок dlh</span><span class="name">Spark в DLH</span><span class="what">одна модель, таблица целиком; масштаб на сотни миллионов строк</span><span class="op">DlhBatchInferenceOperator</span></div>
+        <div class="node k-plat"><span class="kind">чтение и запись</span><span class="name">Greenplum через DAL</span><span class="op">GreenplumToDataframe / DataframeToGreenplum / Execute</span></div>
+      </div>
+      <div class="down" aria-hidden="true">↓</div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label"><b>Данные</b><small>источники и результаты</small></div>
+      <div class="lane-body">
+        <div class="node k-data"><span class="kind">источник</span><span class="name">витрины фичей</span><span class="what">Greenplum сейчас, DLH со временем; одна таблица может быть в обоих</span></div>
+        <div class="node k-data"><span class="kind">модели</span><span class="name">Model Registry</span><span class="what">как есть для gp; бандл <code>scoring bundle</code> для dlh</span></div>
+        <div class="node k-data"><span class="kind">результат</span><span class="name">витрины скоров</span><span class="what"><code>*_fresh</code> (replace), история <code>*_hist</code> (append), отчёты калибровки</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="factory">
+    <h3>Что происходит внутри фабрики</h3>
+    <div class="flow">
+      <div class="node k-ours"><span class="kind">вход</span><span class="name">pipeline.yaml</span><span class="what">выбран рецепт и движок</span></div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="node k-ours"><span class="kind">рецепт</span><span class="name">single / multi / fit_apply</span><span class="what">решает, какие блоки и в каком порядке</span></div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="node k-check"><span class="kind">проверка</span><span class="name">план из блоков</span><span class="what">колонки протягиваются по графу; ошибка видна до запуска</span></div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="node k-ours"><span class="kind">адаптеры</span><span class="name">блок × движок</span><span class="what">единственное место, где живут операторы платформы</span></div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="node k-ours"><span class="kind">выход</span><span class="name">DAG.py</span><span class="what">самодостаточный файл, как от старого инструмента</span></div>
+    </div>
+    <p class="note">Новый сценарий — это новый рецепт из тех же блоков. Если платформа заменит оператор, меняется один адаптер, а конфиги процессов остаются как были.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 2 -->
+<section aria-labelledby="s2">
+  <h2 id="s2">Сценарии</h2>
+  <p class="note">Таски, которые фабрика собирает для каждого рецепта. Имена совпадают с тем, что вы увидите в Airflow.</p>
+
+  <div class="recipes">
+    <div class="recipe">
+      <div class="recipe-head"><h3>Одна модель → один скор</h3><span class="mono">single_model · engine: gp</span><small>bankrupt_phis</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="kind">ждём</span><span class="name">wait_source</span><span class="op">GreenplumTablesWaitSensor</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-check"><span class="kind">читаем + проверяем</span><span class="name">read_source</span><span class="what">пусто? ключ? все колонки?</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-plat"><span class="kind">скорим</span><span class="name">inference</span><span class="what">типы по контракту, скор без пропусков</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-ours"><span class="kind">пишем</span><span class="name">write_*_stg → load</span><span class="what">stg, затем truncate + insert одной транзакцией</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-data"><span class="kind">публикуем</span><span class="name">harmonize → actualize</span><span class="what">гранты и отметка актуальности</span></div>
+      </div>
+    </div>
+
+    <div class="recipe">
+      <div class="recipe-head"><h3>Одна модель на DLH</h3><span class="mono">single_model · engine: dlh</span><small>bankrupt_phis_dlh</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="kind">ждём</span><span class="name">wait_source</span><span class="op">DLHTablesWaitSensor</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-ours"><span class="kind">если query</span><span class="name">prepare_source</span><span class="what">запрос → таблица DLH</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-check"><span class="kind">проверяем</span><span class="name">check_source</span><span class="what">строки, дубли ключа, колонки (Trino)</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-plat"><span class="kind">скорим в Spark</span><span class="name">inference</span><span class="what">бандл модели, createOrReplace</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-check"><span class="kind">проверяем</span><span class="name">check_result</span><span class="what">число строк = входу, скор в [0, 1]</span></div>
+      </div>
+    </div>
+
+    <div class="recipe">
+      <div class="recipe-head"><h3>Несколько моделей → одна витрина</h3><span class="mono">multi_model</span><small>pd_model: 4 модели, 4 скора</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="kind">ждём</span><span class="name">wait_source</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-check"><span class="kind">читаем + проверяем</span><span class="name">read_source</span><span class="what">фичи всех моделей разом</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-plat"><span class="kind">скорим</span><span class="name">inference</span><span class="what">одно окружение — один job на все модели; разные — параллельные job'ы</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-ours"><span class="kind">если job'ов &gt; 1</span><span class="name">merge_scores</span><span class="what">слияние по ключу</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-ours"><span class="kind">пишем</span><span class="name">write_*</span><span class="what">одна витрина, все скоры колонками</span></div>
+      </div>
+    </div>
+
+    <div class="recipe">
+      <div class="recipe-head"><h3>Обучение на лету</h3><span class="mono">fit_apply</span><small>calib_pre: калибровка по продуктам и когортам</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="kind">ждём</span><span class="name">wait_source</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-check"><span class="kind">две выборки</span><span class="name">read_dev · read_apply</span><span class="what">окно собирается в SQL</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-plat"><span class="kind">обучаем и применяем</span><span class="name">fit_apply</span><span class="what">сегмент × когорта; job без модели (<code>mrid=[]</code>)</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-ours"><span class="kind">пишем</span><span class="name">write_* (скоры)</span><span class="what">калиброванный скор</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node k-data"><span class="kind">в историю</span><span class="name">write_* (отчёт)</span><span class="what">объёмы, Brier до и после по каждой ячейке</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Что каждый DAG получает без единой строки кода</h3>
+  <div class="chips">
+    <span class="chip"><b>Алерты</b> в канал при падении</span>
+    <span class="chip"><b>Сенсор</b> актуальности источника</span>
+    <span class="chip"><b>Проверки</b> входа и результата</span>
+    <span class="chip"><b>Атомарная</b> перезапись витрины</span>
+    <span class="chip"><b>Ретраи</b> и один запуск за раз</span>
+    <span class="chip"><b>Документация</b> процесса в Airflow</span>
+    <span class="chip"><b>Тень</b> одной командой</span>
+    <span class="chip"><b>Каталог</b> процессов и зависимостей</span>
+  </div>
+</section>
+
+<!-- ============================================================ 3 -->
+<section aria-labelledby="s3">
+  <h2 id="s3">Как поднять на работе</h2>
+  <p class="note">Шесть этапов по порядку. Каждый заканчивается проверяемым результатом; следующий не начинайте, пока не выполнено условие «готово».</p>
+
+  <div class="phases">
+
+    <div class="phase">
+      <div class="phase-num">1</div>
+      <div class="phase-body">
+        <h3>Репозитории в GitLab</h3>
+        <div class="phase-meta"><span>Кто: владелец фабрики</span><span>Время: полдня</span></div>
+        <ol class="steps">
+          <li>Создайте в GitLab группу команды и два пустых проекта: <code>scoring-kit</code> и <code>scoring-pipelines</code>.</li>
+          <li>Перенесите фабрику с GitHub вместе с тегами версий.</li>
+          <li>Перенесите репозиторий процессов (сейчас он у меня локально; передам удобным вам способом).</li>
+          <li>В <code>scoring-pipelines/requirements.txt</code> замените адрес GitHub на GitLab, тег оставьте <code>v0.3.0</code>.</li>
+          <li>Выберите способ установки пакета коллегами: SSH-ключ, deploy token с правом <code>read_repository</code> или wheel во внутреннем pip-индексе. Последний удобнее всего: обычный <code>pip install scoring-kit==0.3.0</code>.</li>
+        </ol>
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre>git clone https://github.com/Radmayr/scoring-kit.git && cd scoring-kit
+git remote add gitlab &lt;адрес-проекта-scoring-kit-в-GitLab&gt;
+git push gitlab main --tags</pre></div>
+        <p class="done-when"><b>Готово, когда</b> в GitLab оба проекта, а <code>pip install -r requirements.txt</code> ставит фабрику из GitLab на чистой машине.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">2</div>
+      <div class="phase-body">
+        <h3>Рабочее место</h3>
+        <div class="phase-meta"><span>Кто: каждый, кто заводит процессы</span><span>Время: 15 минут</span></div>
+        <ol class="steps">
+          <li><b>На ноутбуке</b> (рендер и ручная публикация, пока нет CI): клонировать <code>scoring-pipelines</code>, поставить зависимости, проверить конфиги.</li>
+          <li><b>В ML Core</b> (отладка на реальных данных): поставить ту же версию фабрики, выгрузить выборку в csv и скачать файл модели из реестра.</li>
+        </ol>
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre>git clone &lt;адрес-scoring-pipelines&gt; && cd scoring-pipelines
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+scoring validate pipelines/*/</pre></div>
+        <p class="done-when"><b>Готово, когда</b> <code>scoring validate pipelines/*/</code> пишет OK для всех четырёх процессов.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">3</div>
+      <div class="phase-body">
+        <h3>Разовые настройки платформы</h3>
+        <div class="phase-meta"><span>Кто: владелец фабрики + админ инстанса</span><span>Время: 1–3 дня (заявки)</span></div>
+        <ol class="steps">
+          <li><b>Ручные DAG'и.</b> Всё, что вы публикуете через mlc из <code>~/airflow_dags</code>, перенесите в <code>scoring-pipelines/dags_manual/</code>. Публикация заменяет всё опубликованное через mlc: DAG, которого нет в папке, исчезнет.</li>
+          <li><b>Алерты.</b> Заведите канал команды и проверьте, что сервисная учётка инстанса может в него писать: включите <code>alerts</code> в любом теневом DAG'е и уроните его один раз руками.</li>
+          <li><b>DLH.</b> Учётке из <code>dp_conn_dlh</code> нужны роли из README оператора (DataPlatform Access, DLH Spark user, группы на чтение и запись схем) и доступ ко <i>всем</i> колонкам таблицы-источника.</li>
+          <li><b>Публикация из CI.</b> Сервисная учётка для mlc: её ключ — в переменные CI (<code>MLC_SERVICE_KEY</code>, тип File), плюс <code>MLC_PROJECT</code>, <code>AIRFLOW_TEST</code>, <code>AIRFLOW_PROD</code>. Нужен образ раннера, в котором есть <code>mlc</code>.</li>
+        </ol>
+        <p class="done-when"><b>Готово, когда</b> тестовое падение приходит сообщением в канал, а кнопка <code>deploy-test</code> в CI публикует набор DAG'ов без ошибок.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">4</div>
+      <div class="phase-body">
+        <h3>Три сценария в тени на тестовом инстансе</h3>
+        <div class="phase-meta"><span>Кто: владелец процесса</span><span>Время: 2–3 дня наблюдений</span></div>
+        <p>Теневой DAG читает те же данные, что и старый процесс, но пишет в таблицы <code>*_shadow</code>. Старый процесс продолжает работать как раньше.</p>
+        <ol class="steps">
+          <li>Впишите в <code>shadow.txt</code> процессы, которые идут в тени: <code>pipelines/pd_model</code>, <code>pipelines/calib_pre</code>.</li>
+          <li>Закройте <code>TODO</code> в их yaml: ключ, таблицы для сенсора, полный список колонок витрины (сверьте с <code>information_schema</code>).</li>
+          <li>Опубликуйте (кнопкой <code>deploy-test</code> или руками, как ниже), запустите теневые DAG'и вручную.</li>
+          <li>После прогона старого и теневого — сверка.</li>
+        </ol>
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre><span class="c"># вручную, пока нет CI: собрать ПОЛНЫЙ набор в одну папку</span>
+rm -rf publish && mkdir -p publish/dags
+scoring render pipelines/*/ -o publish/dags
+scoring render pipelines/pd_model pipelines/calib_pre --shadow -o publish/dags
+cp dags_manual/*.py publish/dags/
+mlc airflow publish coll-models-test -p collectionanalytics -i publish --check
+mlc airflow publish coll-models-test -p collectionanalytics -i publish
+
+<span class="c"># после прогонов: SQL сверки, выполнить в Greenplum</span>
+scoring compare-sql pipelines/pd_model
+scoring compare-sql pipelines/calib_pre</pre></div>
+        <p class="done-when"><b>Готово, когда</b> сверка даёт <code>only_in_prod = only_in_shadow = 0</code>, <code>n_diff_over_tol = 0</code>, <code>n_null_mismatch = 0</code> два-три дня подряд.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">5</div>
+      <div class="phase-body">
+        <h3>DLH-вариант одной модели</h3>
+        <div class="phase-meta"><span>Кто: владелец процесса</span><span>Время: день + заявки на доступ</span></div>
+        <ol class="steps">
+          <li>В ML Core скачайте файл модели Bankrupt из реестра и упакуйте его в бандл.</li>
+          <li>Загрузите бандл в Model Registry новой версией (или новой моделью) и впишите её mrid в <code>model.mrid</code>.</li>
+          <li>Подтвердите таблицу-источник в DLH и её ключ (<code>TODO</code> в yaml).</li>
+          <li>Опубликуйте вместе со всем набором, запустите вручную. Результат — таблица DLH: сравните скоры с витриной Greenplum по ключу в ML Core.</li>
+        </ol>
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre>scoring bundle pipelines/bankrupt_phis_dlh --model model.pkl -o bundle.pkl
+<span class="c"># необязательно: прогнать бандл локально на выборке</span>
+scoring debug pipelines/bankrupt_phis_dlh --data sample.csv --model bundle.pkl</pre></div>
+        <p class="done-when"><b>Готово, когда</b> <code>check_result</code> зелёный, а скоры DLH совпадают с витриной Greenplum.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">6</div>
+      <div class="phase-body">
+        <h3>Переключение и миграция остальных процессов</h3>
+        <div class="phase-meta"><span>Кто: владельцы процессов</span><span>Время: до отключения старого инструмента</span></div>
+        <ol class="steps">
+          <li><b>Переключение одного процесса:</b> пауза старого DAG'а → убрать процесс из <code>shadow.txt</code> → <code>deploy-prod</code> → ручной запуск и проверка витрины → старый DAG неделю на паузе (откат = снять паузу) → удалить.</li>
+          <li><b>Остальные процессы</b> из старого инструмента: вкладка Code в Airflow → yaml (это хорошо умеет агент) → <code>scoring validate</code> → тень → сверка → переключение.</li>
+          <li><b>Навигация:</b> после каждого изменения обновляйте каталог; CI проверяет, что он актуален.</li>
+        </ol>
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre>scoring catalog pipelines/*/ -o CATALOG.md</pre></div>
+        <p class="done-when"><b>Готово, когда</b> в папке <code>piper/</code> на инстансе не осталось живых процессов.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <h3>Три правила, которые нельзя нарушать</h3>
+    <p>1. Публикуется только полный набор DAG'ов из одной папки и только после <code>--check</code>: всё, чего нет в папке, исчезает с инстанса.</p>
+    <p>2. Перед боевым деплоем нового процесса старый DAG ставится на паузу: два DAG'а не должны писать в одну витрину.</p>
+    <p>3. Сгенерированные DAG'и руками не правятся: правка идёт в yaml, DAG пересобирается.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 4 -->
+<section aria-labelledby="s4">
+  <h2 id="s4">Кто за что отвечает</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Роль</th><th>Что делает</th><th>Где</th></tr></thead>
+      <tbody>
+        <tr><td>Владелец фабрики (двое)</td><td>версии scoring-kit, CI, разбор падений обвязки, новые рецепты и адаптеры</td><td><code>scoring-kit</code></td></tr>
+        <tr><td>Владелец процесса</td><td>yaml своего процесса, тень, сверка, переключение, реакция на алерт</td><td><code>scoring-pipelines/pipelines/&lt;имя&gt;</code></td></tr>
+        <tr><td>Ревьюер</td><td>смотрит merge request: изменения yaml и diff собранного DAG'а из CI</td><td>GitLab</td></tr>
+        <tr><td>Агент</td><td>черновики yaml по описанию или по старому DAG'у; ядро фабрики не трогает</td><td><code>pipelines/**</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.querySelectorAll(".copy").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var pre = btn.parentElement.querySelector("pre");
+    var text = pre.innerText;
+    function done(label) { btn.textContent = label; setTimeout(function () { btn.textContent = "Копировать"; }, 1600); }
+    function selectFallback() {
+      var range = document.createRange();
+      range.selectNodeContents(pre);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      done("Выделено");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done("Скопировано"); }, selectFallback);
+    } else {
+      selectFallback();
+    }
+  });
+});
+</script>
