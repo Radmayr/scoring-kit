@@ -88,14 +88,13 @@ scoring debug pipelines/my_model --data sample.csv --model model.pkl
 scoring render pipelines/my_model --shadow -o build/dags   # -> build/dags/my_model_shadow.py
 ```
 
-Публикация: `mlc` выкладывает папку, а `--prefixes` ограничивает набор файлов. Вывод `scoring render`
-(`build/dags/<dag_id>.py`) ложится в ту структуру, которую ждёт инстанс (`dags/<файл>.py`):
+**Важно: `mlc airflow publish` заменяет всё содержимое инстанса публикуемой папкой.** DAG'и, которых нет в папке, с инстанса исчезают. Поэтому публикуется всегда **полный** набор DAG'ов инстанса из одной папки, а не отдельный файл.
 
 ```bash
-# сначала посмотреть, что уйдёт (ничего не публикует)
-mlc airflow publish coll-models-test -p <проект> -i build --prefixes dags/my_model_shadow.py --check
-# затем то же без --check
-mlc airflow publish coll-models-test -p <проект> -i build --prefixes dags/my_model_shadow.py
+scoring render pipelines/*/ -o build/dags                 # все боевые DAG'и инстанса
+scoring render pipelines/my_model --shadow -o build/dags  # + теневой
+mlc airflow publish <инстанс> -p <проект> -i build --check   # список: должны быть ВСЕ DAG'и
+mlc airflow publish <инстанс> -p <проект> -i build
 ```
 
 После прогона обоих DAG'ов сверка:
@@ -175,7 +174,7 @@ scoring compare-sql pipelines/my_model      # печатает SQL; ключ —
 
 ## Открытые вопросы
 
-- Удаляет ли `mlc airflow publish` с инстанса DAG'и, которых нет в публикуемом наборе (с `--prefixes` и без).
+- Как себя ведёт `--prefixes`: публикует подмножество, сохраняя остальное, или тоже заменяет инстанс целиком. Пока не проверено — не использовать.
 - Работает ли `begin; truncate; insert; commit;` одним вызовом `dal.execute`.
 
 ## Командная работа в GitLab
