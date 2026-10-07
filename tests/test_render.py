@@ -172,7 +172,7 @@ def test_introspect_dag_loads():
 
     code = (ROOT / "tools" / "introspect_dag.py").read_text(encoding="utf-8")
     dag = load_dag(code)
-    assert set(dag.tasks) == {"introspect", "gp_version"}
+    assert set(dag.tasks) == {"introspect", "operators_catalog", "gp_version"}
 
 
 def test_multiline_query_is_readable(demo):
