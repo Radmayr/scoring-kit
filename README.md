@@ -1,13 +1,31 @@
 # scoring-kit
 
-Генератор Airflow DAG'ов для батч-скоринга: `pipeline.yaml` + `predictor.py` превращаются в
-самодостаточный `.py` DAG на операторах платформы (`airflow_provider_greenplum`,
-`airflow_provider_inference`). Замена UI-конструктора пайплайнов.
+Фабрика Airflow DAG'ов для батч-скоринга. Процесс описывается в `pipeline.yaml` (что читать, какие
+модели применить, куда писать, когда), фабрика проверяет описание и генерирует самодостаточный
+`.py` DAG на операторах платформы. Airflow знать не нужно. Замена UI-конструктора пайплайнов.
+
+Архитектура и решения — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Сценарии
+
+| Рецепт | Когда | Пример |
+|---|---|---|
+| `single_model` | одна модель → один скор | [demo_scoring](examples/demo_scoring/pipeline.yaml) (свой предиктор), [demo_scoring_dlh](examples/demo_scoring_dlh/pipeline.yaml) (Spark в DLH) |
+| `multi_model` | несколько моделей → несколько скоров → одна витрина | [demo_multi](examples/demo_multi/pipeline.yaml) |
+| `fit_apply` | обучение на лету: калибровка на dev, применение к apply | [demo_calibration](examples/demo_calibration/pipeline.yaml) |
+
+Два движка (`engine`):
+
+| | `gp` (по умолчанию) | `dlh` |
+|---|---|---|
+| Данные | Greenplum | таблицы DLH (Iceberg) |
+| Исполнение | `BatchInferenceOperator` (ML Core job, pandas по батчам) | `DlhBatchInferenceOperator` (Spark) |
+| Рецепты | все | `single_model` |
+| Модель в реестре | как есть (joblib/pickle) | бандл `scoring bundle` (см. ниже) |
 
 ```
-wait_source ─► read_source ─► inference ─► write_<table>: stg ─► load ─► harmonize ─► actualize
- (сенсор)      (Greenplum +     (Batch-         (df → *_stg)  (truncate+insert
-               проверки)      Inference)                     в транзакции)
+gp:   wait_source → read_source (+проверки) → inference → write_<table>: stg → load → harmonize → actualize
+dlh:  wait_source → prepare_source (если query) → check_source → inference (Spark) → check_result
 ```
 
 Чем отличается от старого инструмента:
@@ -16,29 +34,61 @@ wait_source ─► read_source ─► inference ─► write_<table>: stg ─►
 |---|---|---|
 | Где живёт код | текстовые поля UI | git: ревью, история, откат |
 | Типы фичей | восстанавливаются из csv в каждом батче, `make_lgbm_ready` в каждом predict | контракт в yaml, приведение одинаковое для всех батчей |
-| Проверки | самописные шаги (`test_df`) | встроены: пустая выборка, фичи, уникальность ключа, скор без NaN и в [0, 1] |
+| Проверки | самописные шаги, не всегда блокируют запись | встроены: пустая выборка, фичи, ключ, колонки приёмника, скор без пропусков и в диапазоне |
 | replace | drop/create: таблица пустая и без грантов, пока идёт запись | stg + `truncate`/`insert` в одной транзакции |
-| Шагов/подов | 6 | 3 тяжёлых + SQL |
+| Несколько моделей | свой predictor на каждый процесс | `models:` в yaml, без кода |
+| Калибровка | через чужую модель в mrid, склейка dev/apply флагом | рецепт `fit_apply`, отчёт по ячейкам в историю |
+| Алерты | нет | `alerts:` → сообщение в мессенджер при падении |
 | Отладка | кнопка в UI | `scoring debug` локально на том же коде |
 
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.2.0"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.3.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.2.0`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.3.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Процесс
 
-### 1. Заготовка
+### 1. Конфиг
 
 ```bash
-scoring new pipelines/my_model      # pipeline.yaml + predictor.py
+scoring new pipelines/my_model      # заготовка single_model; для других рецептов — копия примера
 ```
 
-### 2. predictor.py
+Общая шапка одинакова для всех рецептов:
+
+```yaml
+recipe: single_model                # single_model | multi_model | fit_apply
+engine: gp                          # gp | dlh (только single_model)
+dag_id: my_model
+owner: i.ivanov
+domain: collection                  # группировка в каталоге и тегах Airflow
+schedule: "30 4 * * *"              # UTC: 04:30 UTC = 07:30 МСК
+alerts:
+  recipients: ["#канал-команды"]    # сообщение при падении любого таска
+wait_for:
+  tables: [schema.features_fresh]   # сенсор актуальности
+```
+
+### 2. Модель: встроенный предиктор или свой
+
+Для бустингов код не нужен:
+
+```yaml
+model:
+  mrid: tenant/model/1.0.0
+  image: <образ>
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  output_kind: proba                # predict_proba()[:, 1]; predict — для регрессии
+  features: [f1, f2, segment]       # в порядке обучения
+  cat_features: [segment]
+  num_dtype: float32                # если при обучении приводили к float32 (make_lgbm_ready)
+```
+
+Нестандартная логика — свой `predictor.py` (без `output_kind`):
 
 ```python
 import joblib
@@ -56,86 +106,139 @@ class Predictor(BasePredictor):
         return df
 ```
 
-Правила (в под передаётся только исходник класса):
-- на верхнем уровне файла — только `import` и класс; константы делайте атрибутами класса, функции — методами;
-- импорты уровня модуля генератор сам копирует в каждый метод;
-- `predict` получает батч (`batch_size` строк) и возвращает DataFrame той же длины с колонкой скора;
-- имена `features`, `cat_features`, `num_dtype`, `cat_as`, `score_column`, `score_range` заняты
-  контрактом (доступны как `self.features` и т.д.).
+Правила для `predictor.py` (в под передаётся только исходник класса): на верхнем уровне — только
+`import` и класс; константы — атрибутами класса, функции — методами; `predict` получает батч и
+возвращает DataFrame той же длины с колонкой скора.
 
-### 3. Локальная отладка
+### 3. Несколько моделей
 
-Выборку выгрузите из Greenplum в csv (например, `select ... limit 100000`), модель — из
-Model Registry.
+```yaml
+recipe: multi_model
+model_defaults:                     # общее; модель может переопределить
+  image: <образ>
+  output_kind: proba
+  cat_features: [segment]
+models:
+  - {name: d30, mrid: t/d30/1.0.0, score_column: score_30, features: [...]}
+  - {name: d90, mrid: t/d90/1.0.0, score_column: score_90, features: [...]}
+```
+
+Модели с одинаковым окружением (`image`, `requirements`, `flavor`, `batch_size`) считаются одним
+job'ом: данные читаются один раз. Разные окружения — параллельные job'ы и слияние по
+`source.checks.unique_key`. Падение любой модели валит процесс: витрина не пишется частично.
+
+### 4. Калибровка (fit_apply)
+
+```yaml
+recipe: fit_apply
+dev:   {query: "select ... from dev_calib_in"}
+apply: {query: "select ... from apply_calib_in", key: [account_rk, due_dt]}
+job:   {image: <образ>, requirements: [pandas==2.1.4, scikit-learn==1.3.2]}
+calibrate:
+  method: isotonic                  # isotonic | sigmoid
+  score: pre_score
+  target: pre_target
+  output: pre_score_calib
+  segments: {product_cd: [CCR, CUR, [MTG, MTF]]}   # список в списке = группа
+  cohort_column: cohort
+  train_offsets: [-3, -2]           # когорта на позиции i учится на i-3 и i-2
+  uncalibrated: null                # null | copy_score
+sinks:
+  - {table: ..., columns: {..., pre_score_calib: numeric}}
+  - {table: ..._report_hist, data: report, mode: append, add_scored_at: true, columns: {...}}
+```
+
+Отчёт (`data: report`): по каждой ячейке сегмент × когорта — объёмы, train-когорты, Brier до и
+после калибровки, статус. Под запускается без модели (`BatchInferenceOperator` с `mrid=[]`).
+
+### 5. DLH (engine: dlh)
+
+`DlhBatchInferenceOperator` вызывает `model.predict(df)` в Spark-образе с другими версиями
+библиотек (lightgbm 4.x, numpy 2, pandas 3). Поэтому в реестр кладётся **бандл**:
+
+```bash
+scoring bundle pipelines/my_model_dlh --model model.pkl -o bundle.pkl
+```
+
+Бандл хранит модель в переносимом виде (текст модели LightGBM / байты CatBoost), сам приводит типы
+фичей по контракту из yaml и восстанавливается без scoring-kit в образе. Загрузите `bundle.pkl` в
+Model Registry новой версией и укажите её mrid в `model.mrid`. Проверено: скоры бандла в
+окружении lightgbm 4.7 / numpy 2 / pandas 3 совпадают с исходной моделью на lightgbm 3.3.5 бит в бит.
+
+Источник — `source.table` (таблица DLH) или `source.query` + `dlh.staging_table` (запрос
+материализуется в таблицу: оператор читает только таблицу целиком). Приёмник — один, `replace`
+(`createOrReplace`); все колонки, кроме скора, переносятся из источника как есть, оператор
+добавляет `processed_dttm`.
+
+### 6. Локальная отладка
 
 ```bash
 scoring debug pipelines/my_model --data sample.csv --model model.pkl
+scoring debug pipelines/pd_model --data sample.csv --model d1=m1.pkl --model d2=m2.pkl ...
+scoring debug pipelines/calib --data dev=dev.csv --data apply=apply.csv
+scoring debug pipelines/my_model_dlh --data sample.csv --model bundle.pkl   # или исходная модель
 ```
 
-Прогоняет `read_source` → `inference` (по батчам, как оператор) → подготовку записи. Исполняется
-ровно тот код, который уйдёт в Airflow. В `debug_out/` — сгенерированный DAG, файлы каждого шага,
-`to_write.csv` и SQL загрузки.
+Исполняется ровно тот код, который уйдёт в Airflow, по тем же правилам, что платформа: класс
+предиктора в том виде, в котором его получает оператор, батчи `read_csv(chunksize)`, входы
+монтируются как `executor_config`. В `debug_out/` — DAG, файлы каждого шага и то, что запишется.
 
-### 4. Теневой прогон
-
-Новый DAG пишет в `<table>_shadow`, старый продолжает работать.
-
-Теневая (как и любая целевая) таблица создаётся самим DAG'ом при первом запуске:
-`create table if not exists` по `sinks[].columns`, существующие таблицы не трогаются. Руками ничего
-создавать не нужно. Тот же DDL печатает `scoring ddl pipelines/my_model [--shadow]`.
+### 7. Тень, сверка, переключение
 
 ```bash
-scoring render pipelines/my_model --shadow -o build/dags   # -> build/dags/my_model_shadow.py
+scoring render pipelines/*/ -o build/dags                   # все боевые DAG'и инстанса
+scoring render pipelines/my_model --shadow -o build/dags    # + теневой: свой dag_id, таблицы *_shadow
 ```
 
-**Важно: `mlc airflow publish` заменяет всё содержимое инстанса публикуемой папкой.** DAG'и, которых нет в папке, с инстанса исчезают. Поэтому публикуется всегда **полный** набор DAG'ов инстанса из одной папки, а не отдельный файл.
+**`mlc airflow publish` заменяет всё, что было опубликовано через mlc, содержимым папки.** DAG'и,
+которых нет в папке, с инстанса исчезают (DAG'и старого инструмента в `piper/` не затрагиваются).
+Публикуется всегда полный набор из одной папки:
 
 ```bash
-scoring render pipelines/*/ -o build/dags                 # все боевые DAG'и инстанса
-scoring render pipelines/my_model --shadow -o build/dags  # + теневой
 mlc airflow publish <инстанс> -p <проект> -i build --check   # список: должны быть ВСЕ DAG'и
 mlc airflow publish <инстанс> -p <проект> -i build
 ```
 
-После прогона обоих DAG'ов сверка:
+Целевые таблицы (в том числе теневые) создаются DAG'ом при первом запуске
+(`create table if not exists` по `sinks[].columns`). После прогонов старого и теневого DAG'а:
 
 ```bash
-scoring compare-sql pipelines/my_model      # печатает SQL; ключ — source.checks.unique_key
+scoring compare-sql pipelines/my_model      # SQL сверки по каждой колонке скора
 ```
 
-Критерий приёмки: `only_in_prod = only_in_shadow = 0`, `n_diff_over_tol = 0`.
+Критерий приёмки: `only_in_prod = only_in_shadow = 0`, `n_diff_over_tol = 0`, `n_null_mismatch = 0`.
 
-### 5. Переключение
-
-1. `scoring render pipelines/my_model -o build/dags` → опубликовать боевой DAG.
-2. Выключить (pause) старый DAG, после 2–3 успешных прогонов удалить его и `_shadow`-DAG/таблицу.
+Переключение: поставить старый DAG на паузу → опубликовать боевой → вручную запустить и проверить →
+старый держать на паузе неделю (откат = снять паузу).
 
 ## Справочник pipeline.yaml
 
-Полный пример — [examples/demo_scoring/pipeline.yaml](examples/demo_scoring/pipeline.yaml).
-
 | Поле | По умолчанию | Смысл |
 |---|---|---|
-| `dag_id`, `owner`, `gp_service` | — | обязательные |
+| `recipe`, `engine` | `single_model`, `gp` | сценарий и движок |
+| `dag_id`, `owner` | — | обязательные |
+| `domain`, `tags`, `description` | — | каталог, теги Airflow, документация DAG'а |
 | `schedule`, `timezone` | `null`, `UTC` | cron и его часовой пояс |
+| `alerts.recipients`, `.on_retry`, `.message` | —, `false`, `""` | уведомление при падении (`TiMeNotifier`) |
+| `gp_service`, `gp_mode` | `vrcl`, `dal` | подключение к Greenplum |
 | `time_limit`, `retries`, `retry_delay_minutes` | `7d`, `1`, `10` | для всех тасков; сенсор не перезапускается |
-| `wait_for.tables`, `.timeout_seconds` | — , `83000` | сенсор актуализации; без блока сенсора нет |
-| `source.query` | — | SQL выборки |
-| `source.checks.min_rows`, `.unique_key` | `1`, `[]` | падение до скоринга, если выборка пустая или ключ не уникален |
+| `wait_for.tables`, `.timeout_seconds` | — , `83000` | сенсор актуальности |
+| `source.query` / `source.table` | — | выборка (table — для `engine: dlh`) |
+| `source.checks.min_rows`, `.unique_key` | `1`, `[]` | падение до скоринга |
+| `model` / `models` / `model_defaults` | — | модель (single) / модели (multi) / общее для моделей |
 | `model.mrid`, `.image`, `.requirements` | — | как в BatchInferenceOperator |
-| `model.features` | — | фичи **в порядке обучения** |
-| `model.cat_features` | `[]` | подмножество features |
-| `model.num_dtype` | `float64` | `float32`, если так обучали (`make_lgbm_ready`) |
-| `model.cat_as` | `category` | `category` — LightGBM, `str` — CatBoost (пропуск → `"nan"`) |
+| `model.output_kind` | — | `proba` / `predict` — встроенный предиктор; без него — `predictor.py` |
+| `model.features`, `.cat_features` | — | фичи **в порядке обучения**, категориальные из них |
+| `model.num_dtype`, `.cat_as` | `float64`, `category` | `float32` как в `make_lgbm_ready`; `str` для CatBoost |
 | `model.score_column`, `.score_range` | `score`, `[0, 1]` | `score_range: null` — не проверять диапазон |
-| `sinks[].table`, `.columns` | — | `schema.table` и колонки с типами Greenplum в нужном порядке |
+| `dlh.image`, `.staging_table`, `.max_executors` | — | для `engine: dlh` |
+| `dev`, `apply`, `job`, `calibrate` | — | для `recipe: fit_apply` |
+| `sinks[].table`, `.columns` | — | `schema.table` и колонки с типами в нужном порядке |
 | `sinks[].mode` | `replace` | `replace` (truncate+insert) \| `append` |
+| `sinks[].data` | `result` | `report` — отчёт калибровки (`fit_apply`) |
 | `sinks[].add_scored_at`, `.add_model_version` | `false` | служебные колонки `scored_at`, `model_mrid` |
-| `sinks[].harmonize`, `.actualize` | `true` | `tcs_harmonize_grants` / `ulabs_actualize` после загрузки |
-| `*.flavor` | `16cpu-256ram` | ресурсы пода для read / inference / write |
-
-Приёмников может быть несколько: например, `*_fresh` в режиме `replace` и `*_hist` в режиме
-`append` с `add_scored_at`.
+| `sinks[].harmonize`, `.actualize` | `true` | гранты / актуализация после загрузки (`gp`) |
+| `*.flavor` | `16cpu-256ram` | ресурсы пода |
 
 ## Команды
 
@@ -145,72 +248,52 @@ scoring compare-sql pipelines/my_model      # печатает SQL; ключ —
 | `scoring validate DIR...` | проверка конфига и predictor.py (для CI) |
 | `scoring render DIR... [-o build/dags] [--shadow]` | генерация DAG-файлов |
 | `scoring debug DIR --data F --model M [--limit N]` | локальный прогон |
+| `scoring bundle DIR --model M -o bundle.pkl` | упаковка модели для `engine: dlh` |
+| `scoring catalog DIR... [-o CATALOG.md]` | каталог: процессы, владельцы, модели, таблицы, зависимости |
 | `scoring ddl DIR [--shadow]` | `create table` приёмников |
 | `scoring compare-sql DIR [--key a,b] [--tol 1e-9]` | SQL сверки прода с тенью |
 
-## Разведка платформы
-
-[tools/introspect_dag.py](tools/introspect_dag.py) печатает в лог версии библиотек, исходники
-`airflow_provider_*` и версию Greenplum. Только чтение. Опубликовать, запустить вручную,
-прочитать логи тасков `introspect` и `gp_version`.
-
 ## Что известно о платформе (по исходникам провайдеров с инстанса)
 
-- **BatchInferenceOperator** читает вход только `pd.read_csv(f, chunksize=batch_size)`, поэтому
-  между тасками всегда csv, а типы колонок определяются в каждом батче заново. Именно для этого
-  нужен контракт `features`/`cat_features`.
-- Из класса предиктора оператор берёт `inspect.getsource`, вырезает подстроку `BasePredictor`,
-  переименовывает класс в `Predictor` и кладёт в `predict.py` без имён уровня модуля. Поэтому
-  импорты должны быть внутри методов (генератор делает это сам), а `scoring debug` запускает класс
-  ровно в таком виде.
-- Job инференса живёт не дольше **2 часов** (`time_limit="2h"` зашит в оператор), `requirements`
-  ставятся через `pip install` при каждом запуске.
-- `DataframeToGreenplumOperator` в `mode="dal"` игнорирует `columns_types`: типы колонок
-  определяет `dal.put_df` по dtype датафрейма. Поэтому `scoring-kit` приводит типы сам, а даты
-  отдаёт как `datetime.date`.
-- `GreenplumExecuteOperator` в dal-режиме выполняет `dal.execute(query)`; поддержка нескольких
-  операторов (`begin; ...; commit;`) в одном вызове проверяется первым теневым прогоном.
-- Airflow 2.10.5, Python 3.11, pandas 2.1.4 в подах тасков; Greenplum 6.27 (PostgreSQL 9.4).
+- **BatchInferenceOperator** читает вход только `pd.read_csv(f, chunksize=batch_size)`; типы
+  колонок определяются в каждом батче заново — для этого контракт `features`/`cat_features`.
+  Класс предиктора передаётся исходником (вырезается `BasePredictor`, класс переименовывается в
+  `Predictor`). Job живёт не дольше 2 часов, `requirements` ставятся при каждом запуске.
+  `mrid=[]` допустим — так работает `fit_apply`.
+- **DlhBatchInferenceOperator** (провайдер помечен как «в разработке»): одна модель; читает
+  `source_table` целиком, пишет `createOrReplace` в `target_table`; у модели вызывает `predict`,
+  список фичей берёт из `model.features`; без явного типа выход пишется как float32 (фабрика
+  задаёт `DoubleType`); `max_wait` по умолчанию 1 час (фабрика — 3 часа). Сервисной учётке
+  `dp_conn_dlh` нужен доступ ко всем колонкам источника.
+- **DataframeToGreenplumOperator** в `mode="dal"` игнорирует `columns_types` — типы приводит фабрика.
+- **GreenplumExecuteOperator** выполняет `begin; truncate; insert; commit;` одним вызовом
+  (проверено теневым прогоном).
+- **Алерты**: `airflow_provider_time.notifications.TiMeNotifier(message, recipients)`.
+- **Публикация**: `mlc` синхронизирует свою часть инстанса целиком; старый инструмент — в `piper/`.
+- Airflow 2.10.5, Python 3.11, pandas 2.1.4 в подах; Greenplum 6.27 (PostgreSQL 9.4).
 
-## Открытые вопросы
-
-- Как себя ведёт `--prefixes`: публикует подмножество, сохраняя остальное, или тоже заменяет инстанс целиком. Пока не проверено — не использовать.
-- Работает ли `begin; truncate; insert; commit;` одним вызовом `dal.execute`.
+Разведчик окружения — [tools/introspect_dag.py](tools/introspect_dag.py) (только чтение).
 
 ## Командная работа в GitLab
 
-Два репозитория:
-
 | Репозиторий | Что лежит | Кто меняет |
 |---|---|---|
-| `scoring-kit` (этот) | фреймворк: генератор, проверки, CLI | 1–2 человека, через merge request |
-| `scoring-pipelines` | `pipelines/<имя>/{pipeline.yaml, predictor.py}` для каждой модели | все аналитики |
+| `scoring-kit` (этот) | фреймворк | 1–2 человека, через merge request |
+| `scoring-pipelines` | `pipelines/<имя>/pipeline.yaml` (+ `predictor.py`), `CATALOG.md` | все аналитики |
 
-Пайплайны ставят фреймворк по закреплённой версии (`requirements.txt` в `scoring-pipelines`). Так
-изменение фреймворка никогда не ломает боевые скоринги неожиданно: сначала новая версия, потом
-осознанное обновление тега в `requirements.txt` через merge request.
+Пайплайны ставят фреймворк по закреплённой версии (`requirements.txt` в `scoring-pipelines`):
+изменение фреймворка никогда не ломает боевые скоринги неожиданно.
 
-**Перенос из GitHub в GitLab:**
+**Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
-```bash
-git remote add gitlab https://<gitlab>/<group>/scoring-kit.git
-git push gitlab main --tags
-```
+**Доступ к установке** (что разрешено политикой): SSH-ключ
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.3.0`), deploy token с правом
+`read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
+(`pip wheel . --no-deps`, затем `pip install scoring-kit==0.3.0`).
 
-**Доступ к установке.** Варианты (выберите, что разрешено политикой):
-- SSH: `pip install "scoring-kit @ git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.2.0"` — у каждого свой ключ;
-- deploy token (Settings → Repository → Deploy tokens, право `read_repository`):
-  `git+https://<user>:<token>@<gitlab>/<group>/scoring-kit.git@v0.2.0`;
-- в CI другого проекта — `CI_JOB_TOKEN` (в `scoring-kit` разрешить доступ: Settings → CI/CD → Job token permissions).
-
-Если во внутренней сети есть pip-индекс (Artifactory/Nexus), удобнее опубликовать туда wheel
-(`pip wheel . --no-deps`) и ставить обычным `pip install scoring-kit==0.2.0` без токенов в командах.
-
-**Выпуск новой версии фреймворка:**
-1. Изменения через merge request, CI (`.gitlab-ci.yml`) гоняет тесты на версиях из подов и на свежих.
-2. Поднять `version` в `pyproject.toml` и `scoring_kit/__init__.py`, влить в `main`.
-3. `git tag v0.3.0 && git push --tags`.
-4. В `scoring-pipelines` поднять тег в `requirements.txt` отдельным merge request'ом.
+**Выпуск версии:** merge request → CI (тесты на версиях из подов и свежих) → поднять `version` в
+`pyproject.toml` и `scoring_kit/__init__.py` → `git tag vX.Y.Z && git push --tags` → в
+`scoring-pipelines` поднять тег отдельным merge request'ом.
 
 ## Разработка
 
@@ -220,4 +303,5 @@ python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 ```
 
 Тесты исполняют сгенерированные DAG'и на заглушках Airflow ([scoring_kit/stubs.py](scoring_kit/stubs.py))
-и сверяют скоры со старым кодом `make_lgbm_ready` бит в бит.
+и сверяют результат с дословным кодом текущих процессов бит в бит: одна модель, четыре модели,
+калибровка, DLH-бандл.

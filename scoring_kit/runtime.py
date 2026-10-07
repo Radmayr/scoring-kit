@@ -98,6 +98,13 @@ def sk_prepare_features(df, features, cat_features, num_dtype, cat_as):
     cats = set(cat_features)
     for c in features:
         s = out[c]
+        if s.dtype == object:
+            # numeric/decimal из Greenplum и Spark приходит объектами Decimal
+            import decimal
+
+            non_null = s.dropna()
+            if len(non_null) and isinstance(non_null.iloc[0], decimal.Decimal):
+                s = pd.to_numeric(s, errors="coerce").astype("float64")
         if c in cats:
             if is_bool_dtype(s):
                 s = s.astype("Int64")
@@ -197,3 +204,198 @@ def sk_conform_to_columns(df, columns_types):
                 out[c] = parsed
     print(f"[scoring-kit] к записи {len(out)} строк, колонки: {list(out.columns)}")
     return out
+
+
+# ---------------------------------------------------------------- встроенный предиктор
+
+
+def sk_load_model(path):
+    """Модель из артефакта реестра: joblib/pickle; нативные форматы бустингов — по расширению."""
+    import pickle
+
+    path = str(path)
+    if path.endswith((".txt", ".lgb")):
+        import lightgbm as lgb
+
+        return lgb.Booster(model_file=path)
+    if path.endswith(".cbm"):
+        import catboost
+
+        model = catboost.CatBoost()
+        model.load_model(path)
+        return model
+    try:
+        import joblib
+
+        return joblib.load(path)
+    except ImportError:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+
+def sk_model_scores(model, X, output_kind):
+    """proba — вероятность класса 1; predict — сырой predict (регрессия, метки)."""
+    import numpy as np
+
+    if output_kind == "proba":
+        if hasattr(model, "predict_proba"):
+            values = np.asarray(model.predict_proba(X))
+            return values[:, 1] if values.ndim == 2 else values
+        # lightgbm.Booster бинарной модели сразу отдаёт вероятность
+        return np.asarray(model.predict(X))
+    return np.asarray(model.predict(X))
+
+
+# ---------------------------------------------------------------- multi_model: слияние job'ов
+
+
+def sk_merge_outputs(paths, key, score_columns):
+    """Первый выход берётся целиком, из остальных — только их колонки скоров по ключу."""
+    import os
+    from pathlib import Path
+
+    import pandas as pd
+
+    root = os.environ.get("SCORING_KIT_WORK_ROOT", "")
+    frames = [pd.read_csv(Path(root + p), low_memory=False) for p in paths]
+    base = frames[0]
+    n = len(base)
+    for frame, cols in zip(frames[1:], score_columns[1:]):
+        if len(frame) != n:
+            raise ValueError(f"[scoring-kit] job'ы вернули разное число строк: {n} и {len(frame)}")
+        clash = [c for c in cols if c in base.columns]
+        if clash:
+            raise ValueError(f"[scoring-kit] колонки {clash} уже есть в результате первого job'а")
+        base = base.merge(frame[list(key) + list(cols)], on=list(key), how="left", validate="one_to_one")
+    if len(base) != n:
+        raise ValueError(f"[scoring-kit] после слияния {len(base)} строк вместо {n}: проверьте ключ {list(key)}")
+    print(f"[scoring-kit] слито {len(frames)} результатов, {n} строк")
+    return base
+
+
+# ---------------------------------------------------------------- fit_apply: калибровка
+
+
+def sk_calibrate(dev, apply, cfg):
+    """Калибровка по сегментам и когортам.
+
+    Для каждого сегмента (декартово произведение значений полей; список значений = группа)
+    когорты dev сортируются; для когорты на позиции i калибратор обучается на когортах с
+    позициями i + train_offsets и применяется к строкам apply той же когорты.
+    Возвращает (apply + колонка калиброванного скора, отчёт по ячейкам).
+    """
+    import itertools
+
+    import numpy as np
+    import pandas as pd
+
+    score, target, output = cfg["score"], cfg["target"], cfg["output"]
+    cohort, offsets, method = cfg["cohort_column"], sorted(cfg["train_offsets"]), cfg["method"]
+    first = -min(offsets)
+    fields = list(cfg["segments"])
+
+    def fit(x, y):
+        if method == "isotonic":
+            from sklearn.isotonic import IsotonicRegression
+
+            model = IsotonicRegression(out_of_bounds="clip")
+            model.fit(x, y)
+            return model.predict
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression()
+        model.fit(x.reshape(-1, 1), y)
+        return lambda v: model.predict_proba(np.asarray(v, dtype=float).reshape(-1, 1))[:, 1]
+
+    def brier(y, p):
+        y = np.asarray(y, dtype=float)
+        p = np.asarray(p, dtype=float)
+        return float(np.mean((p - y) ** 2)) if len(y) else None
+
+    def mask(frame, field, value):
+        if isinstance(value, (list, tuple)):
+            return frame[field].isin(list(value)).to_numpy()
+        return (frame[field] == value).to_numpy()
+
+    calibrated = pd.Series(np.nan, index=apply.index, dtype="float64")
+    report = []
+    for combo in itertools.product(*(cfg["segments"][f] for f in fields)):
+        segment = " & ".join(f"{f}={v}" for f, v in zip(fields, combo))
+        dm = np.ones(len(dev), dtype=bool)
+        am = np.ones(len(apply), dtype=bool)
+        for f, v in zip(fields, combo):
+            dm &= mask(dev, f, v)
+            am &= mask(apply, f, v)
+        dev_seg, apply_seg = dev[dm], apply[am]
+        cohorts = sorted(dev_seg[cohort].dropna().unique())
+        print(f"[scoring-kit] сегмент {segment}: dev {len(dev_seg)} строк, когорт {len(cohorts)}, apply {len(apply_seg)}")
+        if len(cohorts) <= first:
+            report.append({
+                "segment": segment, "cohort": None, "status": "мало когорт в dev", "train_cohorts": None,
+                "train_rows": 0, "test_rows": 0, "apply_rows": int(len(apply_seg)),
+                "brier_raw": None, "brier_calibrated": None,
+            })
+            continue
+        for i in range(first, len(cohorts)):
+            test_cohort = cohorts[i]
+            train_cohorts = [cohorts[i + o] for o in offsets]
+            train = dev_seg[dev_seg[cohort].isin(train_cohorts)]
+            test = dev_seg[dev_seg[cohort] == test_cohort]
+            target_rows = apply_seg[apply_seg[cohort] == test_cohort]
+            row = {
+                "segment": segment, "cohort": str(test_cohort), "train_cohorts": ",".join(map(str, train_cohorts)),
+                "train_rows": int(len(train)), "test_rows": int(len(test)), "apply_rows": int(len(target_rows)),
+                "brier_raw": None, "brier_calibrated": None,
+            }
+            if len(train) == 0 or train[target].nunique(dropna=True) < 2:
+                row["status"] = "нет данных для обучения"
+                report.append(row)
+                continue
+            predict = fit(train[score].astype(float).to_numpy(), train[target].astype(float).to_numpy())
+            if len(test):
+                row["brier_raw"] = brier(test[target], test[score])
+                row["brier_calibrated"] = brier(test[target], predict(test[score].astype(float).to_numpy()))
+            if len(target_rows):
+                calibrated.loc[target_rows.index] = predict(target_rows[score].astype(float).to_numpy())
+            row["status"] = "ok"
+            report.append(row)
+
+    result = apply.copy()
+    if cfg["uncalibrated"] == "copy_score":
+        calibrated = calibrated.fillna(apply[score].astype(float))
+    result[output] = calibrated
+    covered = float(calibrated.notna().mean()) if len(calibrated) else 1.0
+    print(f"[scoring-kit] откалибровано {covered:.2%} строк apply")
+    return result, pd.DataFrame(report)
+
+
+# ---------------------------------------------------------------- engine: dlh
+
+
+def sk_dlh_check_source(df, min_rows):
+    """df — одна строка: n_rows, dup_keys (результат SQL-проверки в Trino)."""
+    row = df.iloc[0]
+    n_rows, dup_keys = int(row["n_rows"]), int(row["dup_keys"])
+    print(f"[scoring-kit] выборка: {n_rows} строк, повторяющихся значений ключа: {dup_keys}")
+    if n_rows < min_rows:
+        raise ValueError(f"[scoring-kit] в выборке {n_rows} строк, ожидалось не меньше {min_rows}")
+    if dup_keys:
+        raise ValueError(f"[scoring-kit] ключ не уникален: {dup_keys} значений ключа повторяются")
+
+
+def sk_dlh_check_target(df, score_range):
+    """df — одна строка: n_rows, n_source, n_score, min_score, max_score."""
+    row = df.iloc[0]
+    n_rows, n_source, n_score = int(row["n_rows"]), int(row["n_source"]), int(row["n_score"])
+    print(
+        f"[scoring-kit] результат: {n_rows} строк (на входе {n_source}), скоров {n_score}, "
+        f"min={row['min_score']}, max={row['max_score']}"
+    )
+    if n_rows != n_source:
+        raise ValueError(f"[scoring-kit] в результате {n_rows} строк, а на входе было {n_source}")
+    if n_score != n_rows:
+        raise ValueError(f"[scoring-kit] {n_rows - n_score} пустых скоров")
+    if score_range is not None and n_rows:
+        lo, hi = score_range
+        if float(row["min_score"]) < lo or float(row["max_score"]) > hi:
+            raise ValueError(f"[scoring-kit] скор вне [{lo}, {hi}]: min={row['min_score']}, max={row['max_score']}")

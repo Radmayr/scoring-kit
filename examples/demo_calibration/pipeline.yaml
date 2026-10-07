@@ -1,0 +1,64 @@
+# Калибровка на лету: обучение на dev (скор + созревший факт), применение к apply.
+recipe: fit_apply
+dag_id: demo_calibration
+description: Калибровка скоров базовой модели по продуктам и когортам
+owner: your.login
+domain: collection
+schedule: "0 10 * * *"
+alerts:
+  recipients: ["#scoring-alerts"]
+
+wait_for:
+  tables: [sandbox.dev_calib_in, sandbox.apply_calib_in]
+
+dev:                             # скользящее окно собирается в SQL
+  query: |
+    select account_id, report_dt, cohort, base_score, base_target, product_cd
+    from sandbox.dev_calib_in
+  min_rows: 1
+apply:
+  query: |
+    select account_id, report_dt, cohort, base_score, product_cd
+    from sandbox.apply_calib_in
+  key: [account_id, report_dt]
+
+job:                             # под без модели (BatchInferenceOperator, mrid=[])
+  image: registry.example/python/3.10/base:latest
+  requirements: [pandas==2.1.4, scikit-learn==1.3.2]
+  flavor: 4cpu-16ram
+
+calibrate:
+  method: isotonic               # isotonic | sigmoid
+  score: base_score
+  target: base_target
+  output: base_score_calib
+  segments:
+    product_cd: [CCR, CUR, REF, [MTG, MTF, MTB]]   # список в списке = группа
+  cohort_column: cohort
+  train_offsets: [-3, -2]        # для когорты на позиции i — обучение на i-3 и i-2
+  uncalibrated: null             # null (оставить пустым) | copy_score
+
+sinks:
+  - table: sandbox.demo_scores_calib_fresh
+    mode: replace
+    columns:
+      account_id: bigint
+      report_dt: date
+      base_score: numeric
+      base_score_calib: numeric
+  - table: sandbox.demo_calib_report_hist
+    data: report                 # отчёт: сегмент × когорта, объёмы, Brier до/после
+    mode: append
+    add_scored_at: true
+    harmonize: false
+    actualize: false
+    columns:
+      segment: varchar
+      cohort: varchar
+      status: varchar
+      train_cohorts: varchar
+      train_rows: int
+      test_rows: int
+      apply_rows: int
+      brier_raw: numeric
+      brier_calibrated: numeric

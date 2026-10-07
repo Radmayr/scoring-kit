@@ -1,0 +1,59 @@
+# Несколько моделей → несколько скоров → одна витрина. predictor.py не нужен.
+recipe: multi_model
+dag_id: demo_multi
+description: Вероятности перехода в более глубокие стадии просрочки (4 модели)
+owner: your.login
+domain: collection
+schedule: "0 5 * * *"           # 05:00 UTC = 08:00 МСК
+tags: [demo]
+alerts:
+  recipients: ["#scoring-alerts"]
+
+wait_for:
+  tables: [sandbox.demo_features_fresh]
+
+source:
+  query: select * from sandbox.demo_features_fresh
+  flavor: 4cpu-32ram
+  checks:
+    min_rows: 1
+    unique_key: [client_id, account_id]
+
+model_defaults:                  # общее для всех моделей; модель может переопределить
+  image: registry.example/mlops/lgbm:latest
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  flavor: 4cpu-32ram
+  output_kind: proba             # predict_proba()[:, 1]
+  cat_features: [segment]
+  num_dtype: float32
+
+models:
+  - name: d1
+    mrid: demo_tenant/demo_d1/0.0.1
+    score_column: score_10
+    features: [segment, bal_avg_3m, dpd_sum_12m, req_cnt_3m]
+  - name: d2
+    mrid: demo_tenant/demo_d2/0.0.1
+    score_column: score_30
+    features: [dpd_sum_12m, segment, debt_sum, open_accnt_cnt]
+  - name: d3
+    mrid: demo_tenant/demo_d3/0.0.1
+    score_column: score_90
+    features: [debt_sum, bal_avg_3m, segment, refuse_flg]
+  - name: d4
+    mrid: demo_tenant/demo_d4/0.0.1
+    score_column: score_90_6m
+    features: [req_cnt_3m, open_accnt_cnt, dpd_sum_12m, segment]
+
+sinks:
+  - table: sandbox.demo_multi_scores_fresh
+    mode: replace
+    columns:
+      client_id: bigint
+      account_id: bigint
+      report_dt: date
+      segment: varchar
+      score_10: numeric
+      score_30: numeric
+      score_90: numeric
+      score_90_6m: numeric

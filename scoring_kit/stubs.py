@@ -105,6 +105,42 @@ class BasePredictor:
         raise NotImplementedError
 
 
+class ModelMeta:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __repr__(self):
+        return f"ModelMeta({self.__dict__})"
+
+
+class OutputType:
+    def __init__(self, type_name, args=()):
+        self.type_name = type_name
+        self.args = args
+
+    def __eq__(self, other):
+        return isinstance(other, OutputType) and (self.type_name, self.args) == (other.type_name, other.args)
+
+    def __repr__(self):
+        return f"OutputType({self.type_name!r})"
+
+
+for _name, _type in (
+    ("FLOAT", "FloatType"), ("DOUBLE", "DoubleType"), ("INT", "IntegerType"), ("LONG", "LongType"),
+    ("STRING", "StringType"), ("DATE", "DateType"), ("TIMESTAMP", "TimestampType"), ("BOOL", "BooleanType"),
+):
+    setattr(OutputType, _name, OutputType(_type))
+
+
+class TiMeNotifier:
+    def __init__(self, message, recipients, **kwargs):
+        self.message = message
+        self.recipients = recipients
+
+    def __call__(self, context):
+        print(f"[stub TiMe] {self.recipients}: {self.message}")
+
+
 def _module(name: str, **attrs) -> types.ModuleType:
     mod = types.ModuleType(name)
     mod.__dict__.update(attrs)
@@ -133,7 +169,30 @@ def _build_modules() -> dict:
     def _datetime(year, month, day, *args, tz=None, **kwargs):
         return dt.datetime(year, month, day, *args)
 
+    dlh_ops = _module(
+        "airflow_provider_dlh.operators.dlh",
+        DLHExecuteOperator=_op("DLHExecuteOperator"),
+        DLHToDataframeOperator=_op("DLHToDataframeOperator"),
+    )
+    dlh_sensors = _module("airflow_provider_dlh.sensors.dlh", DLHTablesWaitSensor=_op("DLHTablesWaitSensor"))
+    dlh_inference = _module(
+        "airflow_provider_dlh_inference.operators",
+        DlhBatchInferenceOperator=_op("DlhBatchInferenceOperator"),
+        ModelMeta=ModelMeta,
+        OutputType=OutputType,
+    )
+    time_notifications = _module("airflow_provider_time.notifications", TiMeNotifier=TiMeNotifier)
+
     return {
+        "airflow_provider_dlh": _module("airflow_provider_dlh"),
+        "airflow_provider_dlh.operators": _module("airflow_provider_dlh.operators"),
+        "airflow_provider_dlh.operators.dlh": dlh_ops,
+        "airflow_provider_dlh.sensors": _module("airflow_provider_dlh.sensors"),
+        "airflow_provider_dlh.sensors.dlh": dlh_sensors,
+        "airflow_provider_dlh_inference": _module("airflow_provider_dlh_inference"),
+        "airflow_provider_dlh_inference.operators": dlh_inference,
+        "airflow_provider_time": _module("airflow_provider_time"),
+        "airflow_provider_time.notifications": time_notifications,
         "airflow": _module("airflow", DAG=StubDAG),
         "airflow.operators": _module("airflow.operators"),
         "airflow.operators.python": python_ops,

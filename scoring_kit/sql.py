@@ -74,7 +74,10 @@ def compare_sql(prod_table: str, shadow_table: str, key: list[str], score_column
         f"    sum(case when p.{p0} is null then 1 else 0 end) as only_in_shadow,\n"
         f"    sum(case when p.{p0} is not null and s.{p0} is not null then 1 else 0 end) as matched,\n"
         f"    max(abs(p.{score_column} - s.{score_column})) as max_abs_diff,\n"
-        f"    sum(case when abs(p.{score_column} - s.{score_column}) > {tol} then 1 else 0 end) as n_diff_over_tol\n"
+        f"    sum(case when abs(p.{score_column} - s.{score_column}) > {tol} then 1 else 0 end) as n_diff_over_tol,\n"
+        # скор пустой в одной таблице и заполнен в другой (abs() от null такие строки не видит)
+        f"    sum(case when p.{p0} is not null and s.{p0} is not null\n"
+        f"             and (p.{score_column} is null) <> (s.{score_column} is null) then 1 else 0 end) as n_null_mismatch\n"
         f"from {prod_table} p\n"
         f"full outer join {shadow_table} s using ({using});"
     )

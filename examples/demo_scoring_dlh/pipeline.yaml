@@ -1,0 +1,45 @@
+# Одна модель на DLH (Spark): DlhBatchInferenceOperator. Источник и приёмник — таблицы DLH.
+# Модель в реестре — упакованная `scoring bundle` (тип фичей приводит сама, переносима между версиями).
+recipe: single_model
+engine: dlh
+dag_id: demo_scoring_dlh
+description: Демо-скоринг на DLH
+owner: your.login
+domain: collection
+schedule: "30 4 * * *"
+alerts:
+  recipients: ["#scoring-alerts"]
+
+wait_for:
+  tables: [sandbox.demo_features_fresh]
+
+source:
+  query: |                       # или table: schema.table — тогда без промежуточной таблицы
+    select client_id, account_id, report_dt, segment, bal_avg_3m, dpd_sum_12m, reason_cd,
+           debt_sum, refuse_flg, req_cnt_3m, open_accnt_cnt
+    from sandbox.demo_features_fresh
+  checks:
+    min_rows: 1
+    unique_key: [client_id, account_id]
+
+dlh:
+  image: registry.example/spark/contrib/tamli:release-1.1.0
+  staging_table: sandbox.demo_scoring_dlh_src   # сюда кладётся результат query
+  # max_executors: 20                            # по умолчанию — по числу строк
+
+model:
+  mrid: demo_tenant/demo_model_bundle/0.0.1     # результат `scoring bundle`
+  output_kind: proba
+  features: [segment, bal_avg_3m, dpd_sum_12m, reason_cd, debt_sum, refuse_flg, req_cnt_3m, open_accnt_cnt]
+  cat_features: [segment, reason_cd, refuse_flg]
+  num_dtype: float32
+
+sinks:
+  - table: sandbox.demo_scores_dlh              # таблица DLH (Iceberg), createOrReplace
+    mode: replace
+    columns:                                    # всё, кроме скора, переносится из выборки как есть
+      client_id: bigint
+      account_id: bigint
+      report_dt: date
+      segment: varchar
+      score: numeric

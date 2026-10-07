@@ -97,22 +97,67 @@ def _cmd_render(args) -> int:
     return 0
 
 
+def _parse_data(items: list[str]):
+    """--data файл | --data имя=файл (имена: source, dev, apply или task_id чтения)."""
+    named = {}
+    for item in items:
+        if "=" in item and not Path(item).exists():
+            k, v = item.split("=", 1)
+            named[k] = v
+        else:
+            named["*"] = item
+    return named
+
+
 def _cmd_debug(args) -> int:
     import pandas as pd
 
     from scoring_kit.debug import run_debug
 
-    result = run_debug(args.dir, args.data, args.model, args.out, limit=args.limit)
+    result = run_debug(args.dir, _parse_data(args.data), args.model or [], args.out, limit=args.limit)
     pipeline = load_pipeline(args.dir)
-    score = result.scored[pipeline.model.score_column]
-    print(f"\nОтскорено строк: {len(result.scored)}")
-    print(score.describe().to_string())
-    for table, df in result.to_write.items():
-        print(f"\n--- {table}: {len(df)} строк к записи ---")
-        with pd.option_context("display.max_columns", None, "display.width", 200):
+    scored = result.scored
+    print(f"\nРезультат: {len(scored)} строк")
+    cols = [c for c in pipeline.output_columns if c in scored.columns]
+    print(scored[cols].describe().to_string())
+    with pd.option_context("display.max_columns", None, "display.width", 200):
+        for table, df in result.to_write.items():
+            print(f"\n--- {table}: {len(df)} строк к записи ---")
             print(df.head())
-        print(f"\nSQL загрузки из stg:\n{result.sql[table]}")
+            if table in result.sql:
+                print(f"\nSQL загрузки из stg:\n{result.sql[table]}")
     print(f"\nФайлы шагов и сгенерированный DAG: {Path(args.out).resolve()}")
+    return 0
+
+
+def _cmd_bundle(args) -> int:
+    import pickle
+
+    from scoring_kit.bundle import bundle_from_file
+
+    pipeline = load_pipeline(args.dir)
+    if pipeline.model is None:
+        print("Ошибка: scoring bundle — для recipe: single_model", file=sys.stderr)
+        return 1
+    bundle = bundle_from_file(args.model, pipeline.model)
+    out = Path(args.out)
+    out.write_bytes(pickle.dumps(bundle))
+    # Самопроверка: бандл восстанавливается из файла.
+    restored = pickle.loads(out.read_bytes())
+    print(f"Бандл: {out} ({out.stat().st_size // 1024} КБ), фичей: {len(restored.features)}")
+    print("Загрузите файл в Model Registry новой версией и укажите её mrid в model.mrid.")
+    return 0
+
+
+def _cmd_catalog(args) -> int:
+    from scoring_kit.catalog import build_catalog
+
+    text = build_catalog([Path(d) for d in args.dirs])
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"Каталог: {args.out}")
+    else:
+        print(text)
     return 0
 
 
@@ -132,12 +177,17 @@ def _cmd_compare_sql(args) -> int:
 
     pipeline = load_pipeline(args.dir)
     shadow = pipeline.as_shadow()
-    key = args.key.split(",") if args.key else pipeline.source.checks.unique_key
+    default_key = pipeline.apply.key if pipeline.recipe == "fit_apply" else pipeline.source.checks.unique_key
+    key = args.key.split(",") if args.key else default_key
     if not key:
         print("Укажите --key или source.checks.unique_key", file=sys.stderr)
         return 1
     for prod, sh in zip(pipeline.sinks, shadow.sinks):
-        print(compare_sql(prod.table, sh.table, key, pipeline.model.score_column, args.tol) + "\n")
+        if prod.data != "result":
+            continue
+        for column in [c for c in pipeline.output_columns if c in prod.columns]:
+            print(f"-- {prod.table}: {column}")
+            print(compare_sql(prod.table, sh.table, key, column, args.tol) + "\n")
     return 0
 
 
@@ -159,13 +209,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--shadow", action="store_true", help="dag_id и таблицы с суффиксом _shadow")
     p.set_defaults(func=_cmd_render)
 
-    p = sub.add_parser("debug", help="локально прогнать чтение -> инференс -> подготовку записи")
+    p = sub.add_parser("debug", help="локально прогнать DAG: чтение -> инференс -> подготовку записи")
     p.add_argument("dir")
-    p.add_argument("--data", required=True, help="выборка (csv) вместо запроса к Greenplum")
-    p.add_argument("--model", required=True, action="append", help="путь к модели; повторить для нескольких mrid")
+    p.add_argument("--data", required=True, action="append",
+                   help="выборка csv вместо запроса; для fit_apply: --data dev=файл --data apply=файл")
+    p.add_argument("--model", action="append",
+                   help="файл модели; по порядку mrid в yaml или имя_модели=файл; для fit_apply не нужен")
     p.add_argument("--out", default="debug_out")
     p.add_argument("--limit", type=int)
     p.set_defaults(func=_cmd_debug)
+
+    p = sub.add_parser("bundle", help="упаковать модель для engine: dlh (переносимый бандл с контрактом фичей)")
+    p.add_argument("dir")
+    p.add_argument("--model", required=True, help="файл исходной модели (joblib/pickle LightGBM или CatBoost)")
+    p.add_argument("-o", "--out", required=True, help="куда сохранить бандл (.pkl)")
+    p.set_defaults(func=_cmd_bundle)
+
+    p = sub.add_parser("catalog", help="каталог процессов: владельцы, модели, таблицы, зависимости")
+    p.add_argument("dirs", nargs="+")
+    p.add_argument("-o", "--out", help="файл (например CATALOG.md); по умолчанию — в консоль")
+    p.set_defaults(func=_cmd_catalog)
 
     p = sub.add_parser("ddl", help="create table для приёмников")
     p.add_argument("dir")
@@ -181,6 +244,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # Консоль Windows (cp1251) не умеет часть символов (→ и т.п.): заменяем, а не падаем.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
