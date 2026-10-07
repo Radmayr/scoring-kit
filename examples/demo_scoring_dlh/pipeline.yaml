@@ -27,6 +27,8 @@ dlh:
   staging_table: sandbox.demo_scoring_dlh_src   # сюда кладётся результат query
   # max_executors: 20                            # по умолчанию — по числу строк
 
+# Контракт ниже вшивается в бандл командой `scoring bundle` и проверяется в check_source до Spark.
+# Поменяли фичи — пересоберите бандл и загрузите новую версию в реестр.
 model:
   mrid: demo_tenant/demo_model_bundle/0.0.1     # результат `scoring bundle`
   output_kind: proba
