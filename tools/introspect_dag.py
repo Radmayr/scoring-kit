@@ -69,7 +69,10 @@ def operators_catalog_callback():
             print(f"  {dist.metadata['Name']}=={dist.version}")
 
     # 1. Самое нужное — первым, чтобы не потерялось при любом сбое ниже.
-    for pkg_name in ("airflow_provider_time", "tnotifier", "airflow_provider_dlh_inference"):
+    # Исходник провайдера уведомлений получен в прошлом прогоне; tnotifier при импорте обрывает
+    # процесс (os._exit), поэтому его не импортируем вовсе.
+    for pkg_name in ("airflow_provider_dlh_inference",):
+        print(f"=== импортирую {pkg_name}", flush=True)
         dump_sources(pkg_name)
 
     # 2. Каталог операторов/нотификаторов остальных провайдеров.
@@ -80,7 +83,11 @@ def operators_catalog_callback():
     except BaseException:
         BaseNotifier = None
 
-    top = sorted(m.name for m in pkgutil.iter_modules() if m.name.startswith(("airflow_provider_", "mlcore")))
+    skip = {"airflow_provider_time", "airflow_provider_dlh_inference"}
+    top = sorted(
+        m.name for m in pkgutil.iter_modules()
+        if m.name.startswith(("airflow_provider_", "mlcore")) and m.name not in skip
+    )
     print("\n=== Модули верхнего уровня:", top, flush=True)
     for pkg_name in top:
         pkg, err = safe_import(pkg_name)
@@ -125,8 +132,9 @@ def gp_version_callback(df):
     print(df.to_string())
 
 
-# --- Эксперимент: можно ли запустить BatchInferenceOperator без модели (mrid=[]) ---
-# Нужен для обучения «на лету» (калибровка): сейчас для этого передают чужую модель.
+# --- Эксперимент: BatchInferenceOperator без модели (mrid=[]) ---
+# Прогон 1: job создаётся и стартует, упал на отсутствии pandas в базовом образе.
+# Прогон 2: с pandas и scikit-learn в requirements должен пройти до конца.
 def make_tiny_input():
     from pathlib import Path
 
@@ -194,7 +202,7 @@ with DAG(
         predict_py=no_model_predictor,
         mrid=[],
         image=IMAGE,
-        requirements=["scikit-learn"],
+        requirements=["pandas==2.1.4", "scikit-learn==1.3.2"],
         flavor="2cpu-4ram",
         batch_size=None,
         input_df_path="/work/input/data.csv",
