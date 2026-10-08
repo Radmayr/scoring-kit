@@ -378,11 +378,11 @@ scoring validate pipelines/*/</pre></div>
           <li>Опубликуйте (кнопкой <code>deploy-test</code> или руками, как ниже), запустите теневые DAG'и вручную.</li>
           <li>После прогона старого и теневого — сверка.</li>
         </ol>
-        <div class="cmd"><button class="copy" type="button">Копировать</button><pre><span class="c"># вручную, пока нет CI: собрать ПОЛНЫЙ набор в одну папку</span>
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre><span class="c"># вручную, пока нет CI. На ТЕСТОВЫЙ инстанс — только теневые версии:</span>
+<span class="c"># он пишет в тот же Greenplum, боевые версии перезаписали бы рабочие таблицы</span>
 rm -rf publish && mkdir -p publish/dags
-scoring render pipelines/*/ -o publish/dags
-scoring render pipelines/pd_model pipelines/calib_pre --shadow -o publish/dags
-cp dags_manual/*.py publish/dags/
+scoring render pipelines/bankrupt_phis pipelines/pd_model pipelines/calib_pre --shadow -o publish/dags
+cp dags_manual/test/*.py publish/dags/
 mlc airflow publish coll-models-test -p collectionanalytics -i publish --check
 mlc airflow publish coll-models-test -p collectionanalytics -i publish
 
@@ -429,7 +429,7 @@ scoring debug pipelines/bankrupt_phis_dlh --data sample.csv --model bundle.pkl</
 
   <div class="warn">
     <h3>Три правила, которые нельзя нарушать</h3>
-    <p>1. Публикуется только полный набор DAG'ов из одной папки и только после <code>--check</code>: всё, чего нет в папке, исчезает с инстанса.</p>
+    <p>1. Публикуется только полный набор DAG'ов из одной папки и только после <code>--check</code>: всё, чего нет в папке, исчезает с инстанса. На тестовый инстанс — только теневые версии процессов: тест и прод пишут в один Greenplum.</p>
     <p>2. Перед боевым деплоем нового процесса старый DAG ставится на паузу: два DAG'а не должны писать в одну витрину.</p>
     <p>3. Сгенерированные DAG'и руками не правятся: правка идёт в yaml, DAG пересобирается.</p>
   </div>
