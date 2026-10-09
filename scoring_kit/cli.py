@@ -59,6 +59,26 @@ def _cmd_schema(args) -> int:
     return 0
 
 
+def _cmd_constructor(args) -> int:
+    from scoring_kit.constructor import (PresetsError, build_constructor, load_presets, merge_presets,
+                                         presets_from_pipelines)
+
+    try:
+        presets = load_presets(args.presets) if args.presets else None
+        if args.pipelines:
+            found = presets_from_pipelines(args.pipelines)
+            presets = merge_presets(presets or {}, found)
+        html = build_constructor(presets)
+    except (PresetsError, PipelineError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    Path(args.out).write_text(html, encoding="utf-8")
+    n = len((presets or {}).get("images") or [])
+    print(f"Конструктор: {args.out}" + (f" (образов в списке: {n})" if presets else " (демо-пресеты)"))
+    print("Откройте файл в браузере или выложите на GitLab Pages — сервер не нужен.")
+    return 0
+
+
 def _cmd_publish(args) -> int:
     from scoring_kit.publish import publish
 
@@ -199,6 +219,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="только собрать папку publish и показать список")
     p.add_argument("--yes", action="store_true", help="без вопроса о подтверждении (для CI)")
     p.set_defaults(func=_cmd_publish)
+
+    p = sub.add_parser("constructor", help="собрать страницу-конструктор pipeline.yaml для команды")
+    p.add_argument("--presets", help="yaml с командными настройками: образы, gp_service, domains, gitlab_new_file_url")
+    p.add_argument("--pipelines", nargs="*", default=[], help="папки работающих процессов: их образы попадут в списки")
+    p.add_argument("-o", "--out", default="constructor.html")
+    p.set_defaults(func=_cmd_constructor)
 
     p = sub.add_parser("schema", help="JSON Schema для подсказок в редакторе")
     p.add_argument("-o", "--out", default="pipeline.schema.json")

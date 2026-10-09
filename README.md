@@ -44,11 +44,31 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.4.0"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.5.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.4.0`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.5.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
+
+## Конструктор: процесс без программирования
+
+`scoring_kit/web/constructor.html` — одна страница без сервера. Коллега выбирает сценарий, заполняет
+пять шагов формы (данные, модель, куда писать, когда), справа сразу видит схему процесса, замечания
+по-русски и готовый `pipeline.yaml` с кнопкой «Скопировать». Время задаётся по Москве, в конфиг
+уходит cron в UTC. Существующий процесс можно открыть: вставить его `pipeline.yaml`, поправить и
+скопировать обратно. Всё, чего форма не показывает (свой `predictor.py`, теги, таймауты, точные
+ресурсы подов), сохраняется без изменений.
+
+Собрать страницу под команду:
+
+```bash
+scoring constructor --presets presets.yaml --pipelines pipelines/*/ -o constructor.html
+```
+
+`presets.yaml` — образы для выпадающих списков, сервис Greenplum, направления и ссылка на создание
+файла в GitLab (формат — в `scoring_kit/constructor.py`). `--pipelines` добавляет в списки образы
+работающих процессов. Готовый файл открывается в браузере или выкладывается на GitLab Pages.
+Логика формы покрыта тестом: каждый пример, открытый в конструкторе, сохраняется идентично.
 
 ## Процесс
 
@@ -271,6 +291,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 
 | | |
 |---|---|
+| `scoring constructor [--presets F] [--pipelines DIR...] [-o F]` | страница-конструктор pipeline.yaml для команды |
 | `scoring new DIR [--recipe R] [--custom-predictor]` | заготовка процесса: single_model, multi_model, fit_apply, dlh |
 | `scoring validate DIR...` | проверка конфига и predictor.py (для CI) |
 | `scoring publish --env test\|prod [--dry-run] [--yes]` | собрать полный набор для инстанса и опубликовать |
@@ -316,7 +337,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.4.0`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.5.0`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
 (`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 

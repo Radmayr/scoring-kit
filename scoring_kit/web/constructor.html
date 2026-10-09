@@ -1,0 +1,1007 @@
+<title>Конструктор скоринга</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Рабочий инструмент: слева форма по шагам, справа живая схема процесса, проверки и готовый конфиг.
+   Цвета блоков схемы те же, что на странице «Фабрика скоринга». */
+:root {
+  --bg: #F3F5F2;
+  --surface: #FFFFFF;
+  --sunken: #EEF1EC;
+  --ink: #18212B;
+  --muted: #5A6572;
+  --line: #D6DBD3;
+  --ours: #2453B8;
+  --ours-soft: #E6ECF8;
+  --platform: #1C7F55;
+  --data: #A86A12;
+  --wait: #6F52A0;
+  --check: #B4421A;
+  --ok: #1C7F55;
+  --font-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --font-body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10151B; --surface: #18202A; --sunken: #121921; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+    --ours: #82A6FF; --ours-soft: #1D2A44; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60; --ok: #4FC38F;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10151B; --surface: #18202A; --sunken: #121921; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+  --ours: #82A6FF; --ours-soft: #1D2A44; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60; --ok: #4FC38F;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body); }
+.app { max-width: 1280px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; display: grid; gap: 24px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font: 600 clamp(22px, 3.4vw, 30px)/1.15 var(--font-display); }
+h2 { font: 600 17px/1.3 var(--font-body); }
+p { margin: 0; }
+code { font-family: var(--font-mono); font-size: 0.88em; }
+.muted { color: var(--muted); }
+
+header.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 24px; }
+header.top .intro { display: grid; gap: 6px; max-width: 70ch; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+button { font: 500 14px/1 var(--font-body); border-radius: 8px; padding: 10px 14px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+button:hover { border-color: var(--ours); }
+button.primary { background: var(--ours); border-color: var(--ours); color: var(--surface); }
+button.small { padding: 6px 10px; font-size: 13px; }
+button.link { border: none; background: none; color: var(--ours); padding: 4px 0; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--ours); outline-offset: 1px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 24px; align-items: start; }
+@media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+/* Шаги формы */
+.steps { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+.step-head { display: flex; align-items: baseline; gap: 12px; }
+.step-num { font: 600 15px/1 var(--font-display); color: var(--ours); min-width: 22px; }
+.step-head .badge { margin-left: auto; font-size: 12px; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--check) 14%, var(--surface)); color: var(--check); }
+.step-head .badge.ok { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); color: var(--ok); }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; }
+.field { display: grid; gap: 5px; min-width: 0; }
+.field > span { font-weight: 500; font-size: 14px; }
+.field small, .hint { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+input[type=text], input[type=time], input[type=number], select, textarea {
+  font: 14px/1.4 var(--font-body); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 100%; box-sizing: border-box; min-width: 0;
+}
+textarea { font-family: var(--font-mono); font-size: 13px; min-height: 96px; resize: vertical; }
+textarea.short { min-height: 64px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+
+/* Выбор сценария */
+.scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.scenario { text-align: left; display: grid; gap: 6px; padding: 14px; border-radius: 10px; line-height: 1.35; }
+.scenario b { font-size: 14.5px; }
+.scenario span { color: var(--muted); font-size: 13px; }
+.scenario[aria-pressed="true"] { border-color: var(--ours); background: var(--ours-soft); box-shadow: inset 0 0 0 1px var(--ours); }
+
+/* Фичи и категориальные */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12.5px/1 var(--font-mono); padding: 6px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--data); border-color: var(--data); color: var(--surface); }
+
+/* Модели (multi) */
+.model-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 12px; background: var(--sunken); }
+.model-card .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* Колонки приёмника */
+.cols { display: grid; gap: 6px; }
+.colrow { display: grid; grid-template-columns: minmax(0, 1fr) 130px 84px; gap: 6px; align-items: center; }
+@media (max-width: 520px) { .colrow { grid-template-columns: minmax(0, 1fr) 110px; } .colrow > :last-child { grid-column: 1 / -1; } }
+.colrow .fixed { font: 12px var(--font-body); color: var(--muted); }
+
+/* Правая панель */
+.panel { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+@media (max-width: 980px) { .panel { position: static; } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+
+.flow { display: grid; gap: 6px; }
+.task { display: grid; grid-template-columns: 6px 1fr; gap: 10px; align-items: stretch; }
+.task i { border-radius: 3px; }
+.task div { padding: 6px 0; display: grid; gap: 1px; min-width: 0; }
+.task b { font: 500 12.5px/1.3 var(--font-mono); overflow-wrap: anywhere; }
+.task small { color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+.t-wait i { background: var(--wait); } .t-check i { background: var(--check); } .t-plat i { background: var(--platform); }
+.t-ours i { background: var(--ours); } .t-data i { background: var(--data); }
+
+.problems { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
+.problems li::marker { color: var(--check); }
+.allgood { color: var(--ok); font-weight: 500; font-size: 14px; }
+
+.yaml-wrap { position: relative; }
+pre.yaml { margin: 0; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; padding: 12px; max-height: 420px; overflow: auto; font: 12px/1.55 var(--font-mono); white-space: pre; }
+.yaml-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.next { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
+
+/* Окно импорта */
+.overlay[hidden] { display: none; }
+.overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--ink) 45%, transparent); display: grid; place-items: center; padding: 16px; z-index: 10; }
+.modal { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; width: min(640px, 100%); display: grid; gap: 12px; }
+.modal textarea { min-height: 260px; }
+.error { color: var(--check); font-size: 13.5px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="intro">
+      <h1>Конструктор скоринга</h1>
+      <p class="muted">Заполните шаги слева — справа сразу видно, какой процесс получится и что ещё не так. Готовый конфиг копируется одной кнопкой; Airflow и программирование не нужны.</p>
+    </div>
+    <div class="actions">
+      <button type="button" id="btn-import">Открыть существующий процесс</button>
+      <button type="button" id="btn-reset">Начать заново</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <form class="steps" id="form" autocomplete="off" onsubmit="return false"></form>
+    <aside class="panel" aria-label="Результат">
+      <section class="card">
+        <h2>Схема процесса</h2>
+        <div class="flow" id="preview"></div>
+      </section>
+      <section class="card">
+        <h2>Проверка</h2>
+        <div id="problems"></div>
+      </section>
+      <section class="card">
+        <h2>Готовый конфиг</h2>
+        <div class="yaml-actions">
+          <button type="button" class="primary" id="btn-copy">Скопировать</button>
+          <span class="hint" id="copy-status"></span>
+        </div>
+        <div class="yaml-wrap"><pre class="yaml" id="yaml"></pre></div>
+        <ol class="next" id="next"></ol>
+      </section>
+    </aside>
+  </div>
+
+  <div class="overlay" id="import" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+      <h2 id="import-title">Открыть существующий процесс</h2>
+      <p class="hint">Вставьте содержимое <code>pipeline.yaml</code> из GitLab — форма заполнится, и процесс можно будет поправить.</p>
+      <textarea id="import-text" spellcheck="false" placeholder="recipe: single_model&#10;dag_id: ..."></textarea>
+      <p class="error" id="import-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="primary" id="import-ok">Заполнить форму</button>
+        <button type="button" id="import-cancel">Отмена</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+
+<script id="team-presets">
+/*TEAM_PRESETS_START*/
+var TEAM = {
+  "gp_service": "vrcl",
+  "gitlab_new_file_url": "",
+  "domains": ["collection"],
+  "images": [
+    {"id": "lgbm", "kind": "model", "label": "LightGBM 3.3.5", "image": "registry.example/mlops/lgbm:latest", "requirements": ["numpy==1.26.0", "pandas==2.1.1", "lightgbm==3.3.5"]},
+    {"id": "calib", "kind": "job", "label": "Калибровка (pandas + scikit-learn)", "image": "registry.example/python/3.10/base:latest", "requirements": ["pandas==2.1.4", "scikit-learn==1.3.2"]},
+    {"id": "spark", "kind": "spark", "label": "Spark tamli", "image": "registry.example/spark/contrib/tamli:release-1.1.0", "requirements": []}
+  ]
+};
+/*TEAM_PRESETS_END*/
+</script>
+
+<script id="logic">
+// ---------------------------------------------------------------- чистая логика: без DOM, проверяется тестами
+var SIZES = {
+  small: {label: "до 1 млн строк", flavor: "4cpu-16ram"},
+  medium: {label: "1–10 млн строк", flavor: "16cpu-128ram"},
+  large: {label: "больше 10 млн строк", flavor: "16cpu-256ram"}
+};
+var COLUMN_TYPES = ["bigint", "int", "numeric", "varchar", "date", "timestamp"];
+var REPORT_COLUMNS = [
+  ["segment", "varchar"], ["cohort", "varchar"], ["status", "varchar"], ["train_cohorts", "varchar"],
+  ["train_rows", "int"], ["test_rows", "int"], ["apply_rows", "int"], ["brier_raw", "numeric"], ["brier_calibrated", "numeric"]
+];
+var IDENT = /^[a-z_][a-z0-9_]*$/;
+var TABLE = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
+var MRID = /^[^/\s]+\/[^\s]+\/[^/\s]+$/;
+var DAYS = [["1", "понедельник"], ["2", "вторник"], ["3", "среда"], ["4", "четверг"], ["5", "пятница"], ["6", "суббота"], ["0", "воскресенье"]];
+var SECTION_NAMES = {top: "общие", alerts: "алерты", wait_for: "ожидание", source: "выборка", checks: "проверки выборки",
+  model: "модель", model_defaults: "общие настройки моделей", dlh: "DLH", dev: "dev-выборка", apply: "apply-выборка",
+  job: "окружение калибровки", calibrate: "калибровка", sink: "приёмник", report: "отчёт", otherSinks: "дополнительные приёмники"};
+
+function presetsOf(kind) { return TEAM.images.filter(function (p) { return p.kind === kind; }); }
+function firstPreset(kind) { var l = presetsOf(kind); return l.length ? l[0].id : "custom"; }
+
+function defaultState() {
+  return {
+    recipe: "single",
+    name: "", description: "", owner: "", domain: (TEAM.domains || [""])[0] || "", draft: false,
+    gpService: TEAM.gp_service || "",
+    schedule: {kind: "daily", time: "07:30", dow: "1", cron: "", orig: "", tz: ""},
+    alerts: "", wait: "", size: "medium", flavors: {},
+    source: {mode: "query", query: "", table: "", key: "", minRows: 1, staging: ""},
+    model: {mrid: "", image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", custom: false,
+      scoreColumn: "score", features: "", cats: [], float32: true},
+    multi: {image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", float32: true,
+      models: [newModel(), newModel()]},
+    calib: {devQuery: "", applyQuery: "", applyKey: "", score: "", target: "", output: "", method: "isotonic",
+      segField: "", segValues: "", segNumeric: false, moreSegments: {},
+      cohort: "cohort", from: -3, to: -2, uncal: "null", job: firstPreset("job"), customImage: "", customReq: ""},
+    spark: firstPreset("spark"), customSpark: "",
+    sink: {table: "", mode: "replace", columns: [], types: {}},
+    report: {enabled: true, table: "", columns: null, imported: false},
+    keep: {}
+  };
+}
+function newModel() { return {name: "", mrid: "", score: "", features: "", cats: [], keep: {}}; }
+
+// Сохранённый черновик мог быть сделан старой версией страницы: недостающие поля берём из умолчаний.
+function mergeState(def, saved) {
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return def;
+  Object.keys(saved).forEach(function (k) {
+    var d = def[k], s = saved[k];
+    def[k] = d && typeof d === "object" && !Array.isArray(d) && s && typeof s === "object" && !Array.isArray(s) && k !== "keep"
+      ? mergeState(d, s) : s;
+  });
+  return def;
+}
+
+function words(text) {
+  return String(text == null ? "" : text).split(/[\s,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+}
+function uniq(list) { var seen = {}; return list.filter(function (x) { if (seen[x]) return false; seen[x] = 1; return true; }); }
+
+// --- расписание: МСК в форме → cron в UTC в конфиге
+function toCron(s) {
+  if (s.kind === "manual") return null;
+  if (s.kind === "custom") return String(s.cron || "").trim() || null;
+  var parts = String(s.time || "07:30").split(":");
+  var h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+  if (isNaN(h) || isNaN(m)) return null;
+  var shifted = h - 3, back = shifted < 0;
+  var uh = (shifted + 24) % 24;
+  var dow = "*";
+  if (s.kind === "weekdays") dow = back ? "0-4" : "1-5";
+  if (s.kind === "weekly") dow = String(back ? (parseInt(s.dow, 10) + 6) % 7 : parseInt(s.dow, 10));
+  return m + " " + uh + " * * " + dow;
+}
+function fromCron(cron) {
+  var base = {kind: "manual", time: "07:30", dow: "1", cron: "", orig: "", tz: ""};
+  if (!cron) return base;
+  var p = String(cron).trim().split(/\s+/);
+  var ok = p.length === 5 && /^\d+$/.test(p[0]) && /^\d+$/.test(p[1]) && p[2] === "*" && p[3] === "*";
+  base.orig = String(cron);
+  if (!ok) { base.kind = "custom"; base.cron = String(cron); return base; }
+  var m = parseInt(p[0], 10), uh = parseInt(p[1], 10), h = (uh + 3) % 24, forward = uh + 3 >= 24;
+  base.time = (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+  if (p[4] === "*") base.kind = "daily";
+  else if ((p[4] === "1-5" && !forward) || (p[4] === "0-4" && forward)) base.kind = "weekdays";
+  else if (/^\d$/.test(p[4])) { base.kind = "weekly"; base.dow = String(forward ? (parseInt(p[4], 10) + 1) % 7 : parseInt(p[4], 10)); }
+  else { base.kind = "custom"; base.cron = String(cron); }
+  return base;
+}
+function scheduleText(s) {
+  if (s.kind === "manual") return "только вручную";
+  if (s.kind === "custom") return "по cron " + (s.cron || "(не задан)") + " (" + (s.tz || "UTC") + ")";
+  var day = s.kind === "daily" ? "каждый день" : s.kind === "weekdays" ? "по будням" :
+    "каждый " + (DAYS.filter(function (d) { return d[0] === s.dow; })[0] || ["", "день"])[1];
+  return day + " в " + s.time + " МСК";
+}
+
+// --- колонки результата: ключ и скоры вычисляются, пользователь добавляет остальные
+function guessType(name) {
+  if (/_(rk|id)$/.test(name)) return "bigint";
+  if (/_(dt|date)$/.test(name)) return "date";
+  if (/_dttm$/.test(name)) return "timestamp";
+  if (/(score|calib|proba|prob)/.test(name)) return "numeric";
+  if (/(_cd|_status|_name|segment)$/.test(name)) return "varchar";
+  return "numeric";
+}
+function keyOf(st) { return words(st.recipe === "calib" ? st.calib.applyKey : st.source.key); }
+function scoreColumns(st) {
+  if (st.recipe === "calib") return st.calib.output ? [st.calib.output] : [];
+  if (st.recipe === "multi") return st.multi.models.map(function (m) { return m.score; }).filter(Boolean);
+  return [st.model.scoreColumn || "score"];
+}
+function requiredColumns(st) { return uniq(keyOf(st).concat(scoreColumns(st))); }
+// Итоговые колонки: сохранённые (введённые или из исходного конфига) + недостающие обязательные в конце.
+function sinkColumns(st) {
+  var cols = st.sink.columns.map(function (c, i) { return {name: c.name, type: c.type, index: i}; });
+  var have = cols.map(function (c) { return c.name; });
+  requiredColumns(st).forEach(function (name) {
+    if (have.indexOf(name) < 0) cols.push({name: name, type: st.sink.types[name] || guessType(name), index: -1});
+  });
+  return cols;
+}
+
+function imageOf(id, custom, customReq) {
+  if (id === "custom") return {image: String(custom || "").trim(), requirements: words(customReq)};
+  var p = TEAM.images.filter(function (x) { return x.id === id; })[0];
+  return p ? {image: p.image, requirements: p.requirements.slice()} : {image: "", requirements: []};
+}
+
+// --- yaml
+function q(v) {
+  var s = String(v);
+  if (s === "" || /^\s|\s$/.test(s) || /[:#{}\[\],&*?|<>=!%@`'"\\]/.test(s) || /^-/.test(s) ||
+      /^(true|false|null|yes|no|on|off|y|n|~)$/i.test(s) || (/^[-+.\d]/.test(s) && !isNaN(Number(s)))) {
+    return JSON.stringify(s);
+  }
+  return s;
+}
+function yScalar(v) {
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return q(v);
+}
+function list(arr) { return "[" + arr.map(function (x) { return Array.isArray(x) ? list(x) : yScalar(x); }).join(", ") + "]"; }
+function pad(n) { return new Array(n + 1).join(" "); }
+function block(text, indent) {
+  return "|\n" + String(text).replace(/\s+$/, "").split("\n").map(function (l) { return pad(indent) + l.replace(/\s+$/, ""); }).join("\n");
+}
+function isPlain(v) { return v && typeof v === "object" && !Array.isArray(v); }
+// Значение после «ключ: » для произвольных сохранённых настроек.
+function yValue(v, indent) {
+  if (Array.isArray(v)) {
+    if (!v.some(isPlain)) return list(v);
+    return "\n" + v.map(function (item) { return yItem(item, indent + 2); }).join("\n");
+  }
+  if (isPlain(v)) return Object.keys(v).length ? "\n" + yLines(v, indent + 2).join("\n") : "{}";
+  if (typeof v === "string" && v.indexOf("\n") >= 0) return block(v, indent + 2);
+  return yScalar(v);
+}
+function yLines(obj, indent) {
+  return Object.keys(obj || {}).filter(function (k) { return obj[k] !== undefined; })
+    .map(function (k) { return pad(indent) + k + ": " + yValue(obj[k], indent); });
+}
+function yItem(obj, indent) {
+  var lines = yLines(obj, indent + 2);
+  if (!lines.length) return pad(indent) + "- {}";
+  lines[0] = pad(indent) + "- " + lines[0].slice(indent + 2);
+  return lines.join("\n");
+}
+function rest(obj, handled) {
+  var out = {};
+  Object.keys(obj || {}).forEach(function (k) { if (handled.indexOf(k) < 0 && obj[k] !== undefined) out[k] = obj[k]; });
+  return Object.keys(out).length ? out : undefined;
+}
+
+function segmentTokens(st) {
+  return String(st.calib.segValues || "").split("\n").map(function (line) {
+    return words(line).map(function (t) { return st.calib.segNumeric && /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : t; });
+  }).filter(function (g) { return g.length; }).map(function (g) { return g.length === 1 ? g[0] : g; });
+}
+function rangeOffsets(from, to) {
+  var a = parseInt(from, 10), b = parseInt(to, 10), r = [];
+  if (isNaN(a) || isNaN(b)) return [-3, -2];
+  for (var i = Math.min(a, b); i <= Math.max(a, b); i++) r.push(i);
+  return r;
+}
+function scenarioTitle(r) {
+  return {single: "одна модель", dlh: "одна модель на DLH", multi: "несколько моделей", calib: "калибровка"}[r];
+}
+// Ресурсы пода: по объёму данных или, для открытого процесса, как было в исходном конфиге.
+function flavorOf(st, place) {
+  if (st.size === "keep") return st.flavors[place] || null;
+  return SIZES[st.size].flavor;
+}
+function flavorPlaces(st) {
+  if (st.recipe === "dlh") return [];
+  if (st.recipe === "calib") return ["dev", "apply", "job", "sink"].concat(st.report.enabled ? ["report"] : []);
+  return ["source", st.recipe === "multi" ? "model_defaults" : "model", "sink"];
+}
+
+function buildYaml(st) {
+  var out = [], keep = st.keep || {};
+  function fl(place, indent) { var f = flavorOf(st, place); return f ? [pad(indent) + "flavor: " + q(f)] : []; }
+  function kept(section, indent) { return yLines(keep[section], indent); }
+  var recipe = st.recipe === "multi" ? "multi_model" : st.recipe === "calib" ? "fit_apply" : "single_model";
+
+  out.push("# Собрано в «Конструкторе скоринга». Сценарий: " + scenarioTitle(st.recipe));
+  out.push("recipe: " + recipe);
+  if (st.recipe === "dlh") out.push("engine: dlh");
+  out.push("dag_id: " + q(st.name || "my_process"));
+  out.push("description: " + q(st.description || ""));
+  out.push("owner: " + q(st.owner || "your.login"));
+  if (st.domain) out.push("domain: " + q(st.domain));
+  var cron = toCron(st.schedule);
+  if (st.schedule.orig && st.schedule.kind !== "custom" && toCron(fromCron(st.schedule.orig)) === cron) cron = st.schedule.orig;
+  out.push("schedule: " + (cron ? q(cron) : "null") + "    # " + scheduleText(st.schedule));
+  if (st.draft) out.push("draft: true    # черновик: проверяется, но не публикуется");
+  if (st.recipe !== "dlh" && st.gpService) out.push("gp_service: " + q(st.gpService));
+  out = out.concat(kept("top", 0));
+
+  var channels = words(st.alerts);
+  if (channels.length) out.push(["alerts:", "  recipients: " + list(channels)].concat(kept("alerts", 2)).join("\n"));
+  var wait = words(st.wait);
+  if (wait.length) out.push(["wait_for:", "  tables: " + list(wait)].concat(kept("wait_for", 2)).join("\n"));
+
+  if (st.recipe === "calib") {
+    var c = st.calib;
+    out.push(["dev:", "  query: " + block(c.devQuery || "select ...", 4)].concat(fl("dev", 2), kept("dev", 2)).join("\n"));
+    out.push(["apply:", "  query: " + block(c.applyQuery || "select ...", 4)].concat(fl("apply", 2),
+      ["  key: " + list(words(c.applyKey))], kept("apply", 2)).join("\n"));
+    var job = imageOf(c.job, c.customImage, c.customReq);
+    out.push(["job:", "  image: " + q(job.image), "  requirements: " + list(job.requirements)].concat(fl("job", 2), kept("job", 2)).join("\n"));
+    out.push(["calibrate:", "  method: " + c.method, "  score: " + q(c.score), "  target: " + q(c.target), "  output: " + q(c.output),
+      "  segments:", "    " + (c.segField || "segment") + ": " + list(segmentTokens(st))]
+      .concat(yLines(c.moreSegments, 4), [
+        "  cohort_column: " + q(c.cohort), "  train_offsets: " + list(rangeOffsets(c.from, c.to)),
+        "  uncalibrated: " + (c.uncal === "copy_score" ? "copy_score" : "null")], kept("calibrate", 2)).join("\n"));
+  } else {
+    var src = ["source:"];
+    if (st.source.mode === "table" && st.recipe === "dlh") src.push("  table: " + q(st.source.table));
+    else src.push("  query: " + block(st.source.query || "select ...", 4));
+    src = src.concat(st.recipe === "dlh" ? [] : fl("source", 2), ["  checks:", "    min_rows: " + (parseInt(st.source.minRows, 10) || 0),
+      "    unique_key: " + list(words(st.source.key))], kept("checks", 4), kept("source", 2));
+    out.push(src.join("\n"));
+    if (st.recipe === "dlh") {
+      var sp = imageOf(st.spark, st.customSpark, "");
+      var dl = ["dlh:", "  image: " + q(sp.image)];
+      if (st.source.mode === "query") dl.push("  staging_table: " + q(st.source.staging));
+      out.push(dl.concat(kept("dlh", 2)).join("\n"));
+    }
+    if (st.recipe === "multi") {
+      var mm = st.multi, img = imageOf(mm.image, mm.customImage, mm.customReq);
+      out.push(["model_defaults:", "  image: " + q(img.image), "  requirements: " + list(img.requirements)]
+        .concat(fl("model_defaults", 2), ["  output_kind: " + mm.outputKind, "  num_dtype: " + (mm.float32 ? "float32" : "float64")],
+          kept("model_defaults", 2)).join("\n"));
+      out.push("models:\n" + mm.models.map(function (m) {
+        var f = words(m.features);
+        return ["  - name: " + q(m.name), "    mrid: " + q(m.mrid), "    score_column: " + q(m.score), "    features: " + list(f),
+          "    cat_features: " + list(m.cats.filter(function (x) { return f.indexOf(x) >= 0; }))].concat(yLines(m.keep, 4)).join("\n");
+      }).join("\n"));
+    } else {
+      var md = st.model, feats = words(md.features);
+      var ml = ["model:", "  mrid: " + list(words(md.mrid))];
+      if (st.recipe === "single") {
+        var im = imageOf(md.image, md.customImage, md.customReq);
+        ml.push("  image: " + q(im.image), "  requirements: " + list(im.requirements));
+        ml = ml.concat(fl("model", 2));
+      }
+      if (!md.custom) ml.push("  output_kind: " + md.outputKind);
+      if ((md.scoreColumn || "score") !== "score") ml.push("  score_column: " + q(md.scoreColumn));
+      ml.push("  features: " + list(feats), "  cat_features: " + list(md.cats.filter(function (x) { return feats.indexOf(x) >= 0; })),
+        "  num_dtype: " + (md.float32 ? "float32" : "float64"));
+      if (md.outputKind === "predict" && !md.custom) ml.push("  score_range: null");
+      out.push(ml.concat(kept("model", 2)).join("\n"));
+    }
+  }
+
+  var sk = ["sinks:", "  - table: " + q(st.sink.table), "    mode: " + (st.recipe === "dlh" ? "replace" : st.sink.mode)];
+  if (st.recipe !== "dlh") sk = sk.concat(fl("sink", 4));
+  sk.push("    columns:");
+  sinkColumns(st).forEach(function (col) { sk.push("      " + col.name + ": " + col.type); });
+  out.push(sk.concat(kept("sink", 4)).join("\n"));
+  if (st.recipe === "calib" && st.report.enabled) {
+    var extra = st.report.imported ? keep.report : {mode: "append", add_scored_at: true, actualize: false};
+    var rp = ["  - table: " + q(st.report.table), "    data: report"].concat(fl("report", 4), yLines(extra, 4), ["    columns:"]);
+    (st.report.columns || REPORT_COLUMNS).forEach(function (col) { rp.push("      " + col[0] + ": " + col[1]); });
+    out.push(rp.join("\n"));
+  }
+  if (keep.otherSinks) out.push(keep.otherSinks.map(function (s) { return yItem(s, 2); }).join("\n"));
+  return out.join("\n") + "\n";
+}
+
+// --- проверки: те же правила, что у scoring validate, по-русски и по шагам
+function validate(st) {
+  var p = [];
+  function add(step, text) { p.push({step: step, text: text}); }
+  if (!st.name) add(2, "Задайте имя процесса.");
+  else if (!IDENT.test(st.name)) add(2, "Имя процесса: только строчные латинские буквы, цифры и _ (например bankrupt_score).");
+  if (!st.owner) add(2, "Укажите владельца — логин того, кто отвечает за процесс.");
+  if (st.schedule.kind === "custom" && words(st.schedule.cron).length !== 5) add(2, "Cron должен состоять из пяти частей, например 30 4 * * *.");
+  words(st.wait).forEach(function (t) { if (!TABLE.test(t)) add(2, "Таблица ожидания «" + t + "»: нужен вид schema.table."); });
+
+  var key = keyOf(st);
+  key.forEach(function (k) { if (!IDENT.test(k)) add(3, "Ключ «" + k + "»: только строчные латинские буквы, цифры и _."); });
+
+  if (st.recipe === "calib") {
+    var c = st.calib;
+    if (!String(c.devQuery).trim()) add(3, "Нужен запрос dev-выборки (скор + факт).");
+    if (!String(c.applyQuery).trim()) add(3, "Нужен запрос apply-выборки (новые скоры).");
+    if (!key.length) add(3, "Укажите ключ apply-выборки — по нему пишется результат.");
+    [["score", "колонка скора", "pre_score"], ["target", "колонка факта", "pre_target"], ["output", "колонка результата", "pre_score_calib"],
+     ["cohort", "колонка когорты", "cohort"], ["segField", "поле сегмента", "product_cd"]]
+      .forEach(function (x) { if (!IDENT.test(c[x[0]] || "")) add(4, "Калибровка: " + x[1] + " — латиницей, например " + x[2] + "."); });
+    if (!segmentTokens(st).length) add(4, "Перечислите значения сегментов — по одному на строку.");
+    if (c.segNumeric && words(c.segValues).some(function (t) { return !/^-?\d+(\.\d+)?$/.test(t); }))
+      add(4, "Отмечено, что сегменты — числа, но среди значений есть текст.");
+    if (rangeOffsets(c.from, c.to).some(function (o) { return o >= 0; })) add(4, "Окно обучения должно быть в прошлом: сдвиги отрицательные, например с −3 по −2.");
+    if (imageOf(c.job, c.customImage, c.customReq).image === "") add(4, "Выберите окружение для калибровки.");
+    if (st.report.enabled && !TABLE.test(st.report.table)) add(5, "Таблица отчёта: вид schema.table.");
+  } else {
+    if (st.recipe === "dlh" && st.source.mode === "table") {
+      if (!TABLE.test(st.source.table)) add(3, "Таблица-источник: вид schema.table.");
+    } else {
+      if (!String(st.source.query).trim()) add(3, "Нужен SQL-запрос выборки.");
+      if (st.recipe === "dlh" && !TABLE.test(st.source.staging)) add(3, "Для запроса на DLH укажите промежуточную таблицу (schema.table): оператор читает только таблицу.");
+    }
+    if (st.recipe === "multi" && !key.length) add(3, "Для нескольких моделей нужен ключ выборки.");
+  }
+
+  if (st.recipe === "single" || st.recipe === "dlh") {
+    var md = st.model, f = words(md.features);
+    var mrids = words(md.mrid);
+    if (!mrids.length || !mrids.every(function (x) { return MRID.test(x); })) add(4, "Ссылка на модель из Model Registry: вид команда/модель/версия.");
+    if (mrids.length > 1 && !md.custom) add(4, "Несколько ссылок на модель бывают только со своим predictor.py — оставьте одну.");
+    if (!IDENT.test(md.scoreColumn || "")) add(4, "Колонка скора — латиницей, например score.");
+    if (!f.length) add(4, "Перечислите фичи модели в порядке обучения.");
+    f.forEach(function (x) { if (!IDENT.test(x)) add(4, "Фича «" + x + "»: только строчные латинские буквы, цифры и _."); });
+    if (uniq(f).length !== f.length) add(4, "В списке фичей есть повторы.");
+    if (st.recipe === "single" && imageOf(md.image, md.customImage, md.customReq).image === "") add(4, "Выберите окружение модели.");
+    if (st.recipe === "dlh" && imageOf(st.spark, st.customSpark, "").image === "") add(4, "Выберите Spark-образ.");
+    if (st.recipe === "dlh" && md.custom) add(4, "На DLH свой predictor.py не поддерживается — нужен бандл модели.");
+  }
+  if (st.recipe === "multi") {
+    var mm = st.multi, names = [], scores = [], kinds = {};
+    if (mm.models.length < 2) add(4, "Нужно хотя бы две модели (для одной выберите сценарий «Одна модель»).");
+    if (imageOf(mm.image, mm.customImage, mm.customReq).image === "") add(4, "Выберите окружение моделей.");
+    mm.models.forEach(function (m, i) {
+      var n = "Модель " + (i + 1) + ": ", mf = words(m.features);
+      if (!IDENT.test(m.name)) add(4, n + "короткое имя латиницей, например pd_30.");
+      if (!MRID.test(m.mrid)) add(4, n + "ссылка из Model Registry вида команда/модель/версия.");
+      if (!IDENT.test(m.score)) add(4, n + "имя колонки скора латиницей, например score_30.");
+      if (!mf.length) add(4, n + "перечислите фичи.");
+      names.push(m.name); scores.push(m.score);
+      mf.forEach(function (x) {
+        var kind = m.cats.indexOf(x) >= 0 ? "cat" : "num";
+        if (kinds[x] && kinds[x] !== kind) add(4, "Фича «" + x + "» категориальная в одной модели и числовая в другой.");
+        kinds[x] = kind;
+      });
+    });
+    if (uniq(names.filter(Boolean)).length !== names.filter(Boolean).length) add(4, "Имена моделей повторяются.");
+    if (uniq(scores.filter(Boolean)).length !== scores.filter(Boolean).length) add(4, "Колонки скоров повторяются.");
+  }
+
+  if (!TABLE.test(st.sink.table)) add(5, "Таблица результата: вид schema.table.");
+  var cols = sinkColumns(st), colNames = cols.map(function (x) { return x.name; });
+  cols.forEach(function (x) { if (!IDENT.test(x.name)) add(5, x.name ? "Колонка «" + x.name + "»: только строчные латинские буквы, цифры и _." : "Есть колонка без имени — заполните или уберите."); });
+  if (uniq(colNames).length !== colNames.length) add(5, "Колонки результата повторяются.");
+  if (st.recipe === "dlh" && colNames.indexOf("processed_dttm") >= 0) add(5, "processed_dttm добавляет оператор DLH — уберите её из колонок.");
+  return p;
+}
+
+// --- схема процесса: те же таски, что соберёт фабрика
+function previewTasks(st) {
+  var t = [], wait = words(st.wait), sink = st.sink.table || "таблица результата";
+  if (wait.length) t.push(["wait", "wait_source", "ждём обновления: " + wait.join(", ")]);
+  if (st.recipe === "calib") {
+    t.push(["check", "read_dev · read_apply", "две выборки + проверки"]);
+    t.push(["plat", "fit_apply", "калибровка по сегментам и когортам"]);
+    t.push(["ours", "write → " + sink, "калиброванный скор " + (st.calib.output || "")]);
+    if (st.report.enabled) t.push(["data", "write → " + (st.report.table || "отчёт"), "отчёт: объёмы и Brier по ячейкам"]);
+    return t;
+  }
+  if (st.recipe === "dlh") {
+    if (st.source.mode === "query") t.push(["ours", "prepare_source", "запрос → " + (st.source.staging || "промежуточная таблица")]);
+    t.push(["check", "check_source", "строки, дубли ключа, колонки"]);
+    t.push(["plat", "inference (Spark)", "модель " + (st.model.mrid || "…")]);
+    t.push(["check", "check_result", "результат в " + sink]);
+    return t;
+  }
+  t.push(["check", "read_source", "выборка + проверки: пусто? ключ? колонки?"]);
+  if (st.recipe === "multi") t.push(["plat", "inference", st.multi.models.length + " модели → " + scoreColumns(st).join(", ")]);
+  else t.push(["plat", "inference", (st.model.custom ? "свой predictor.py, " : "") + "модель " + (st.model.mrid || "…")]);
+  t.push(["ours", "write → " + sink, st.sink.mode === "append" ? "дописать строки" : "заменить содержимое"]);
+  t.push(["data", "harmonize · actualize", "гранты и отметка актуальности"]);
+  return t;
+}
+
+// Какие сохранённые из исходного конфига настройки форма не показывает (чтобы сказать об этом).
+function keptSections(st) {
+  var names = Object.keys(st.keep || {}).filter(function (k) { return st.keep[k]; }).map(function (k) { return SECTION_NAMES[k] || k; });
+  if (st.multi.models.some(function (m) { return m.keep && Object.keys(m.keep).length; })) names.push("отдельные модели");
+  if (Object.keys(st.calib.moreSegments || {}).length) names.push("дополнительные поля сегментов");
+  return names;
+}
+
+// --- открыть существующий pipeline.yaml
+function fromConfig(cfg) {
+  var st = defaultState(), keep = {};
+  function pick(img, req, kind) {
+    var p = TEAM.images.filter(function (x) { return x.kind === kind && x.image === img &&
+      JSON.stringify(x.requirements) === JSON.stringify(req || []); })[0];
+    return p ? {id: p.id, custom: "", req: ""} : {id: "custom", custom: img || "", req: (req || []).join(", ")};
+  }
+  var flavors = {};
+  st.recipe = cfg.recipe === "multi_model" ? "multi" : cfg.recipe === "fit_apply" ? "calib" : (cfg.engine === "dlh" ? "dlh" : "single");
+  st.name = cfg.dag_id || ""; st.description = cfg.description || ""; st.owner = cfg.owner || "";
+  st.domain = cfg.domain || ""; st.draft = !!cfg.draft;
+  st.gpService = st.recipe === "dlh" ? "" : (cfg.gp_service || "");
+  keep.top = rest(cfg, ["recipe", "engine", "dag_id", "description", "owner", "domain", "schedule", "draft", "alerts", "wait_for",
+    "source", "model", "models", "model_defaults", "dlh", "dev", "apply", "job", "calibrate", "sinks"].concat(st.recipe === "dlh" ? [] : ["gp_service"]));
+  st.schedule = fromCron(cfg.schedule);
+  if (cfg.timezone && cfg.timezone !== "UTC") {
+    st.schedule = {kind: cfg.schedule ? "custom" : "manual", time: "07:30", dow: "1", cron: cfg.schedule || "", orig: cfg.schedule || "", tz: cfg.timezone};
+  }
+  if (cfg.alerts) { st.alerts = (cfg.alerts.recipients || []).join(", "); keep.alerts = rest(cfg.alerts, ["recipients"]); }
+  if (cfg.wait_for) { st.wait = (cfg.wait_for.tables || []).join(", "); keep.wait_for = rest(cfg.wait_for, ["tables"]); }
+  if (cfg.source) {
+    var s = cfg.source, ch = s.checks || {};
+    st.source.mode = s.table ? "table" : "query";
+    st.source.query = s.query || ""; st.source.table = s.table || "";
+    st.source.key = (ch.unique_key || []).join(", "); st.source.minRows = ch.min_rows != null ? ch.min_rows : 1;
+    flavors.source = s.flavor;
+    keep.source = rest(s, ["query", "table", "checks"].concat(cfg.engine === "dlh" ? [] : ["flavor"]));
+    keep.checks = rest(ch, ["min_rows", "unique_key"]);
+  }
+  if (cfg.dlh) {
+    st.source.staging = cfg.dlh.staging_table || "";
+    var spk = pick(cfg.dlh.image, [], "spark"); st.spark = spk.id; st.customSpark = spk.custom;
+    keep.dlh = rest(cfg.dlh, ["image", "staging_table"]);
+  }
+  if (cfg.model) {
+    var m = cfg.model, mi = pick(m.image, m.requirements, "model");
+    st.model = {mrid: [].concat(m.mrid || []).join(", "), image: mi.id, customImage: mi.custom, customReq: mi.req,
+      outputKind: m.output_kind || "proba", custom: !m.output_kind, scoreColumn: m.score_column || "score",
+      features: (m.features || []).join(", "), cats: (m.cat_features || []).slice(), float32: m.num_dtype === "float32"};
+    flavors.model = m.flavor;
+    var handled = ["mrid", "image", "requirements", "flavor", "output_kind", "score_column", "features", "cat_features", "num_dtype"];
+    if (m.output_kind === "predict" && m.score_range === null) handled.push("score_range");
+    keep.model = rest(m, handled);
+  }
+  if (cfg.models) {
+    var d = cfg.model_defaults || {}, first = cfg.models[0] || {};
+    var dImage = d.image || first.image, dReq = d.requirements || first.requirements;
+    var di = pick(dImage, dReq, "model");
+    st.multi = {image: di.id, customImage: di.custom, customReq: di.req, outputKind: d.output_kind || first.output_kind || "proba",
+      float32: (d.num_dtype || first.num_dtype) === "float32",
+      models: cfg.models.map(function (x) {
+        var own = rest(x, ["name", "mrid", "score_column", "features", "cat_features"]) || {};
+        // Совпадающее с общими настройками не дублируем в модели.
+        if (own.image === dImage) delete own.image;
+        if (JSON.stringify(own.requirements) === JSON.stringify(dReq)) delete own.requirements;
+        return {name: x.name || "", mrid: [].concat(x.mrid || [])[0] || "", score: x.score_column || "",
+          features: (x.features || []).join(", "), cats: (x.cat_features || d.cat_features || []).slice(), keep: own};
+      })};
+    flavors.model_defaults = d.flavor;
+    keep.model_defaults = rest(d, ["image", "requirements", "flavor", "output_kind", "num_dtype", "cat_features"]);
+  }
+  if (cfg.recipe === "fit_apply") {
+    var cb = cfg.calibrate || {}, segs = cb.segments || {}, fields = Object.keys(segs), segField = fields[0] || "";
+    var ji = pick(cfg.job && cfg.job.image, cfg.job && cfg.job.requirements, "job");
+    var offs = cb.train_offsets || [-3, -2], more = {};
+    fields.slice(1).forEach(function (f) { more[f] = segs[f]; });
+    var values = segs[segField] || [];
+    st.calib = {devQuery: (cfg.dev || {}).query || "", applyQuery: (cfg.apply || {}).query || "",
+      applyKey: ((cfg.apply || {}).key || []).join(", "), score: cb.score || "", target: cb.target || "", output: cb.output || "",
+      method: cb.method || "isotonic", segField: segField,
+      segValues: values.map(function (v) { return Array.isArray(v) ? v.join(", ") : v; }).join("\n"),
+      segNumeric: JSON.stringify(values).indexOf('"') < 0 && values.length > 0, moreSegments: more,
+      cohort: cb.cohort_column || "cohort", from: Math.min.apply(null, offs), to: Math.max.apply(null, offs),
+      uncal: cb.uncalibrated === "copy_score" ? "copy_score" : "null", job: ji.id, customImage: ji.custom, customReq: ji.req};
+    flavors.dev = (cfg.dev || {}).flavor; flavors.apply = (cfg.apply || {}).flavor; flavors.job = (cfg.job || {}).flavor;
+    keep.dev = rest(cfg.dev, ["query", "flavor"]);
+    keep.apply = rest(cfg.apply, ["query", "flavor", "key"]);
+    keep.job = rest(cfg.job, ["image", "requirements", "flavor"]);
+    var calHandled = ["method", "score", "target", "output", "segments", "cohort_column", "uncalibrated"];
+    if (JSON.stringify(offs) === JSON.stringify(rangeOffsets(st.calib.from, st.calib.to))) calHandled.push("train_offsets");
+    keep.calibrate = rest(cb, calHandled);
+  }
+  var sinks = cfg.sinks || [];
+  var result = sinks.filter(function (x) { return x.data !== "report"; })[0];
+  var report = sinks.filter(function (x) { return x.data === "report"; })[0];
+  if (result) {
+    st.sink = {table: result.table || "", mode: result.mode || "replace", types: {},
+      columns: Object.keys(result.columns || {}).map(function (k) { return {name: k, type: String(result.columns[k])}; })};
+    flavors.sink = result.flavor;
+    keep.sink = rest(result, ["table", "mode", "flavor", "columns", "data"]);
+  }
+  st.report = {enabled: !!report, imported: !!report, table: report ? report.table : "",
+    columns: report ? Object.keys(report.columns || {}).map(function (k) { return [k, String(report.columns[k])]; }) : null};
+  if (report) { flavors.report = report.flavor; keep.report = rest(report, ["table", "data", "flavor", "columns"]); }
+  var others = sinks.filter(function (x) { return x !== result && x !== report; });
+  if (others.length) keep.otherSinks = others;
+
+  Object.keys(keep).forEach(function (k) { if (keep[k] === undefined) delete keep[k]; });
+  st.keep = keep;
+  Object.keys(flavors).forEach(function (k) { if (!flavors[k]) delete flavors[k]; });
+  st.flavors = flavors;
+  // Если все ресурсы совпадают с одним из размеров — показываем его, иначе оставляем как было.
+  var places = flavorPlaces(st);
+  st.size = !places.length ? "medium" : Object.keys(SIZES).filter(function (k) {
+    return places.every(function (p) { return flavors[p] === SIZES[k].flavor; });
+  })[0] || "keep";
+  return st;
+}
+</script>
+
+<script id="ui">
+// ---------------------------------------------------------------- страница
+var STORAGE = "scoring-constructor-v1";
+var state = load();
+
+function load() {
+  try { var raw = localStorage.getItem(STORAGE); if (raw) return mergeState(defaultState(), JSON.parse(raw)); } catch (e) {}
+  return defaultState();
+}
+function save() { try { localStorage.setItem(STORAGE, JSON.stringify(state)); } catch (e) {} }
+
+function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function get(path) { return path.split(".").reduce(function (o, k) { return o == null ? o : o[k]; }, state); }
+function set(path, value) {
+  var keys = path.split("."), o = state;
+  for (var i = 0; i < keys.length - 1; i++) o = o[keys[i]];
+  o[keys[keys.length - 1]] = value;
+}
+function fid(path) { return "f-" + path.replace(/\./g, "-"); }
+
+function input(path, label, opts) {
+  opts = opts || {};
+  var v = get(path);
+  var attrs = 'data-bind="' + path + '"' + (opts.rerender ? ' data-rerender="1"' : "") + ' id="' + fid(path) + '"';
+  var control = opts.textarea
+    ? "<textarea " + attrs + (opts.short ? ' class="short"' : "") + ' spellcheck="false" placeholder="' + esc(opts.ph || "") + '">' + esc(v) + "</textarea>"
+    : '<input type="' + (opts.type || "text") + '" ' + attrs + ' value="' + esc(v) + '" placeholder="' + esc(opts.ph || "") + '">';
+  return '<label class="field"><span>' + label + "</span>" + control + (opts.hint ? "<small>" + opts.hint + "</small>" : "") + "</label>";
+}
+function select(path, label, options, opts) {
+  opts = opts || {};
+  var v = String(get(path));
+  return '<label class="field"><span>' + label + '</span><select data-bind="' + path + '"' + (opts.rerender ? ' data-rerender="1"' : "") +
+    ' id="' + fid(path) + '">' + options.map(function (o) {
+      return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === v ? " selected" : "") + ">" + esc(o[1]) + "</option>";
+    }).join("") + "</select>" + (opts.hint ? "<small>" + opts.hint + "</small>" : "") + "</label>";
+}
+function checkbox(path, label) {
+  return '<label class="check"><input type="checkbox" data-bind="' + path + '" id="' + fid(path) + '"' + (get(path) ? " checked" : "") + "> " + label + "</label>";
+}
+function imageSelect(prefix, kind, label, customPath, reqPath) {
+  var opts = presetsOf(kind).map(function (p) { return [p.id, p.label]; }).concat([["custom", "Другой образ…"]]);
+  var html = select(prefix, label, opts, {rerender: true, hint: imageHint(get(prefix))});
+  if (get(prefix) === "custom") {
+    html += input(customPath, "Адрес образа", {ph: "registry/…/image:tag"});
+    if (reqPath) html += input(reqPath, "Пакеты, которые доставить (через запятую)", {ph: "numpy==1.26.0, lightgbm==3.3.5"});
+  }
+  return html;
+}
+function imageHint(id) {
+  var p = TEAM.images.filter(function (x) { return x.id === id; })[0];
+  return p ? "Образ <code>" + esc(p.image) + "</code>" + (p.requirements.length ? " + " + esc(p.requirements.join(", ")) : "") : "";
+}
+function catChips(path, featuresText, cats) {
+  var f = words(featuresText);
+  if (!f.length) return '<p class="hint">Здесь появятся фичи — отметьте категориальные.</p>';
+  return '<div class="field"><span>Категориальные фичи</span><div class="chips">' + f.map(function (x) {
+    return '<button type="button" class="chip" data-cat="' + path + '" data-feature="' + esc(x) + '" aria-pressed="' + (cats.indexOf(x) >= 0) + '">' + esc(x) + "</button>";
+  }).join("") + "</div><small>Нажмите на фичу, чтобы отметить её категориальной (продукт, статус, код). Остальные считаются числовыми.</small></div>";
+}
+function plural(n, a, b, c) { var m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c; }
+function stepHead(n, title) {
+  return '<div class="step-head"><span class="step-num">' + n + "</span><h2>" + title + '</h2><span class="badge" data-badge="' + n + '"></span></div>';
+}
+
+function renderForm() {
+  var r = state.recipe, html = [];
+
+  html.push('<section class="step">' + stepHead(1, "Что делаем") + '<div class="scenarios">' +
+    [["single", "Одна модель", "Модель из реестра → скор в витрину Greenplum"],
+     ["multi", "Несколько моделей", "Несколько скоров в одну витрину по одной выборке"],
+     ["calib", "Калибровка", "Каждый день учимся на свежем окне и применяем к новым данным"],
+     ["dlh", "Одна модель на DLH", "Spark, данные в DLH; модель упакована бандлом"]].map(function (s) {
+      return '<button type="button" class="scenario" data-recipe="' + s[0] + '" aria-pressed="' + (r === s[0]) + '"><b>' + s[1] + "</b><span>" + s[2] + "</span></button>";
+    }).join("") + "</div></section>");
+
+  var sizes = Object.keys(SIZES).map(function (k) { return [k, SIZES[k].label]; });
+  if (state.size === "keep") sizes.push(["keep", "как в исходном процессе"]);
+  var kept = keptSections(state);
+  html.push('<section class="step">' + stepHead(2, "Процесс и расписание") + '<div class="grid2">' +
+    input("name", "Имя процесса", {ph: "bankrupt_score", hint: "Латиницей: станет именем DAG'а в Airflow."}) +
+    input("owner", "Владелец", {ph: "i.ivanov", hint: "Логин того, кто отвечает за процесс."}) + "</div>" +
+    input("description", "Что считает процесс", {ph: "Вероятность банкротства клиентов на стадии 30+"}) +
+    '<div class="grid2">' +
+    select("schedule.kind", "Когда запускать", [["daily", "Каждый день"], ["weekdays", "По будням"], ["weekly", "Раз в неделю"], ["manual", "Только вручную"], ["custom", "Свой cron"]], {rerender: true}) +
+    (state.schedule.kind === "weekly" ? select("schedule.dow", "День недели", DAYS) : "") +
+    (["daily", "weekdays", "weekly"].indexOf(state.schedule.kind) >= 0 ? input("schedule.time", "Время (МСК)", {type: "time"}) : "") +
+    (state.schedule.kind === "custom" ? input("schedule.cron", "Cron (" + esc(state.schedule.tz || "UTC") + ")", {ph: "30 4 * * *"}) : "") + "</div>" +
+    '<div class="grid2">' +
+    input("wait", "Ждать обновления таблиц", {ph: "schema.features_fresh", hint: "Процесс стартует, только когда эти таблицы обновились. Можно оставить пустым."}) +
+    input("alerts", "Куда писать при падении", {ph: "#scoring-alerts", hint: "Канал (#имя) или логины через запятую. Можно оставить пустым."}) + "</div>" +
+    '<div class="grid2">' + select("size", "Объём данных", sizes, {hint: "От объёма зависят ресурсы пода."}) +
+    (TEAM.domains && TEAM.domains.length > 1 ? select("domain", "Направление", TEAM.domains.map(function (d) { return [d, d]; })) : input("domain", "Направление", {ph: "collection"})) + "</div>" +
+    checkbox("draft", "Черновик — проверять, но пока не публиковать") +
+    (kept.length ? '<p class="hint">Из исходного конфига сохранены настройки, которых нет в форме: ' + esc(kept.join(", ")) + ". Они попадут в итоговый конфиг без изменений.</p>" : "") +
+    "</section>");
+
+  var data = '<section class="step">' + stepHead(3, "Данные");
+  if (r === "calib") {
+    data += input("calib.devQuery", "Dev-выборка: скор + созревший факт", {textarea: true, ph: "select account_rk, due_dt, cohort, pre_score, pre_target, product_cd\nfrom usr_schema.dev_calib_in",
+      hint: "На ней калибратор обучается. Скользящее окно собирается в этом запросе или в таблице, которую он читает."}) +
+      input("calib.applyQuery", "Apply-выборка: новые скоры", {textarea: true, ph: "select account_rk, due_dt, cohort, pre_score, product_cd\nfrom usr_schema.apply_calib_in"}) +
+      input("calib.applyKey", "Ключ apply-выборки", {ph: "account_rk, due_dt", rerender: true, hint: "Колонки, однозначно задающие строку. Попадут в результат."});
+  } else {
+    if (r === "dlh") data += select("source.mode", "Откуда берём", [["table", "Готовая таблица DLH"], ["query", "SQL-запрос"]], {rerender: true});
+    if (r === "dlh" && state.source.mode === "table") {
+      data += input("source.table", "Таблица в DLH", {ph: "usr_schema.features"});
+    } else {
+      data += input("source.query", "SQL-запрос выборки", {textarea: true, ph: "select client_id, report_dt, feature_1, feature_2, segment_cd\nfrom usr_schema.features_fresh",
+        hint: "Только нужные колонки: фичи, ключ и то, что пойдёт в результат."});
+      if (r === "dlh") data += input("source.staging", "Промежуточная таблица", {ph: "usr_schema.my_process_src", hint: "Результат запроса сохраняется сюда: оператор DLH читает только таблицу."});
+    }
+    data += '<div class="grid2">' + input("source.key", "Ключ выборки", {ph: "client_id", rerender: true, hint: "Колонки, однозначно задающие строку. Дубли остановят процесс до скоринга."}) +
+      input("source.minRows", "Минимум строк", {type: "number", hint: "Если строк меньше — процесс остановится: значит, данные не пришли."}) + "</div>";
+  }
+  html.push(data + "</section>");
+
+  var m = '<section class="step">' + stepHead(4, r === "calib" ? "Калибровка" : r === "multi" ? "Модели" : "Модель");
+  if (r === "single" || r === "dlh") {
+    m += input("model.mrid", r === "dlh" ? "Ссылка на упакованную модель (бандл)" : "Ссылка на модель в Model Registry", {ph: "team/model_name/1.0.0",
+      hint: r === "dlh" ? "Бандл делается из обычной модели командой scoring bundle — попросите администратора." : "Скопируйте из интерфейса Model Registry, версию указывайте явно."});
+    m += r === "single" ? imageSelect("model.image", "model", "Окружение модели", "model.customImage", "model.customReq")
+      : imageSelect("spark", "spark", "Spark-образ", "customSpark", null);
+    m += state.model.custom
+      ? '<p class="hint">У процесса свой <code>predictor.py</code>: логика модели в нём, файл лежит в папке процесса и конструктором не меняется.</p>'
+      : '<div class="grid2">' + select("model.outputKind", "Что выдаёт модель", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
+    m += '<div class="grid2">' + input("model.scoreColumn", "Колонка скора", {ph: "score", rerender: true}) + "</div>";
+    m += input("model.features", "Фичи — в том порядке, в котором модель обучалась", {textarea: true, short: true, rerender: true,
+      ph: "feature_1, feature_2, segment_cd", hint: "Можно вставить списком из ноутбука: через запятую, пробел или с новой строки."});
+    m += catChips("model", state.model.features, state.model.cats);
+    m += checkbox("model.float32", "Числа приводились к float32 при обучении (как make_lgbm_ready)");
+  } else if (r === "multi") {
+    m += imageSelect("multi.image", "model", "Окружение моделей", "multi.customImage", "multi.customReq");
+    m += '<div class="grid2">' + select("multi.outputKind", "Что выдают модели", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
+    m += checkbox("multi.float32", "Числа приводились к float32 при обучении (как make_lgbm_ready)");
+    state.multi.models.forEach(function (md, i) {
+      var p = "multi.models." + i;
+      m += '<div class="model-card"><div class="row"><b>Модель ' + (i + 1) + "</b>" +
+        (state.multi.models.length > 2 ? '<button type="button" class="link" data-remove-model="' + i + '">Убрать</button>' : "") + "</div>" +
+        '<div class="grid2">' + input(p + ".name", "Короткое имя", {ph: "pd_30"}) + input(p + ".score", "Колонка скора", {ph: "score_30", rerender: true}) + "</div>" +
+        input(p + ".mrid", "Ссылка в Model Registry", {ph: "team/pd_30/1.0.0"}) +
+        input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd"}) +
+        catChips(p, md.features, md.cats) + "</div>";
+    });
+    m += '<div><button type="button" class="small" data-add-model="1">+ Добавить модель</button></div>';
+  } else {
+    m += '<div class="grid2">' + input("calib.score", "Колонка скора", {ph: "pre_score"}) + input("calib.target", "Колонка факта (0/1)", {ph: "pre_target"}) +
+      input("calib.output", "Как назвать калиброванный скор", {ph: "pre_score_calib", rerender: true}) + input("calib.cohort", "Колонка когорты", {ph: "cohort"}) + "</div>";
+    m += '<div class="grid2">' + input("calib.segField", "Поле сегмента", {ph: "product_cd"}) +
+      select("calib.method", "Метод", [["isotonic", "Изотоническая регрессия"], ["sigmoid", "Сигмоида (Платт)"]]) + "</div>";
+    m += input("calib.segValues", "Сегменты — по одному на строку", {textarea: true, ph: "CCR\nCUR\nMTG, MTF, MTB",
+      hint: "Строка с несколькими значениями через запятую — одна группа: калибруется вместе."});
+    m += checkbox("calib.segNumeric", "В данных значения сегмента — числа, а не текст");
+    m += '<div class="grid2">' + input("calib.from", "Окно обучения: с когорты", {type: "number", hint: "Относительно текущей: −3 — три когорты назад."}) +
+      input("calib.to", "по когорту", {type: "number", hint: "Сейчас используется окно с −3 по −2."}) + "</div>";
+    m += select("calib.uncal", "Если строку не удалось откалибровать", [["null", "Оставить пустой"], ["copy_score", "Записать исходный скор"]]);
+    m += imageSelect("calib.job", "job", "Окружение калибровки", "calib.customImage", "calib.customReq");
+  }
+  html.push(m + "</section>");
+
+  var s = '<section class="step">' + stepHead(5, "Куда писать результат");
+  s += '<div class="grid2">' + input("sink.table", r === "dlh" ? "Таблица в DLH" : "Таблица в Greenplum", {ph: "usr_schema.my_process_scores"}) +
+    (r === "dlh" ? '<div class="field"><span>Режим</span><small>Таблица DLH пересоздаётся целиком при каждом запуске.</small></div>'
+      : select("sink.mode", "Режим", [["replace", "Заменять содержимое"], ["append", "Дописывать (история)"]])) + "</div>";
+  var req = requiredColumns(state);
+  s += '<div class="field"><span>Колонки результата</span><div class="cols">' + sinkColumns(state).map(function (c) {
+    var fixed = req.indexOf(c.name) >= 0;
+    var typePath = c.index >= 0 ? "sink.columns." + c.index + ".type" : "sink.types." + c.name;
+    var name = fixed || c.index < 0
+      ? '<input type="text" value="' + esc(c.name) + '" disabled aria-label="Колонка">'
+      : '<input type="text" data-bind="sink.columns.' + c.index + '.name" data-rerender="1" value="' + esc(c.name) + '" placeholder="имя колонки" aria-label="Колонка">';
+    return '<div class="colrow">' + name + '<select data-bind="' + typePath + '" aria-label="Тип">' + COLUMN_TYPES.concat(COLUMN_TYPES.indexOf(c.type) < 0 ? [c.type] : []).map(function (t) {
+        return "<option" + (t === c.type ? " selected" : "") + ">" + esc(t) + "</option>";
+      }).join("") + "</select>" + (fixed ? '<span class="fixed">ключ / скор</span>'
+        : '<button type="button" class="link" data-remove-col="' + c.index + '">Убрать</button>') + "</div>";
+  }).join("") + "</div><small>" + (r === "dlh" ? "Всё, кроме скора, переносится из источника как есть." : "Ключ и скоры добавляются сами. Остальные колонки должны прийти из выборки.") +
+    '</small><div><button type="button" class="small" data-add-col="1">+ Колонка</button></div></div>';
+  if (r === "calib") {
+    s += checkbox("report.enabled", "Сохранять отчёт калибровки (объёмы и Brier по каждой ячейке)");
+    if (state.report.enabled) s += input("report.table", "Таблица отчёта", {ph: "usr_schema.my_process_report_hist"});
+  }
+  html.push(s + "</section>");
+
+  var form = document.getElementById("form"), y = window.scrollY;
+  form.innerHTML = html.join("");
+  window.scrollTo(0, y);
+  refresh();
+}
+
+function refresh() {
+  var pr = validate(state);
+  document.getElementById("preview").innerHTML = previewTasks(state).map(function (t) {
+    return '<div class="task t-' + t[0] + '"><i></i><div><b>' + esc(t[1]) + "</b><small>" + esc(t[2]) + "</small></div></div>";
+  }).join("") + '<p class="hint">Запуск: ' + esc(scheduleText(state.schedule)) + "</p>";
+  document.getElementById("problems").innerHTML = pr.length
+    ? '<ol class="problems">' + pr.map(function (p) { return "<li>Шаг " + p.step + ": " + esc(p.text) + "</li>"; }).join("") + "</ol>"
+    : '<p class="allgood">Всё заполнено — конфиг можно отправлять.</p>';
+  document.getElementById("yaml").textContent = buildYaml(state);
+  document.querySelectorAll("[data-badge]").forEach(function (badge) {
+    var n = Number(badge.getAttribute("data-badge")), count = pr.filter(function (p) { return p.step === n; }).length;
+    badge.className = count ? "badge" : "badge ok";
+    badge.textContent = count ? count + " " + plural(count, "замечание", "замечания", "замечаний") : "готово";
+  });
+  var name = state.name || "имя_процесса", gl = TEAM.gitlab_new_file_url;
+  document.getElementById("next").innerHTML = [
+    "Нажмите «Скопировать».",
+    gl ? 'Откройте <a href="' + esc(gl.replace("{name}", encodeURIComponent(name))) + '" target="_blank" rel="noopener">новый файл в GitLab</a> и вставьте конфиг.'
+       : "В GitLab, в репозитории scoring-pipelines, создайте файл <code>pipelines/" + esc(name) + "/pipeline.yaml</code> и вставьте конфиг.",
+    "Сохраните в новую ветку и создайте merge request — проверки запустятся сами.",
+    "После одобрения нажмите «deploy-test» в разделе CI/CD → Pipelines."
+  ].map(function (x) { return "<li>" + x + "</li>"; }).join("");
+  save();
+}
+
+// ---------------------------------------------------------------- события
+var form = document.getElementById("form");
+form.addEventListener("input", function (e) {
+  var path = e.target.getAttribute("data-bind");
+  if (!path) return;
+  var v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+  if (e.target.type === "number") v = v === "" ? "" : Number(v);
+  if (path === "name") v = v.trim();
+  set(path, v);
+  if (e.target.tagName === "SELECT" && e.target.hasAttribute("data-rerender")) renderForm(); else refresh();
+});
+form.addEventListener("change", function (e) {
+  if ((e.target.hasAttribute("data-rerender") && e.target.tagName !== "SELECT") || e.target.type === "checkbox") renderForm();
+});
+form.addEventListener("click", function (e) {
+  var b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.recipe) { state.recipe = b.dataset.recipe; renderForm(); return; }
+  if (b.dataset.cat) {
+    var obj = get(b.dataset.cat), f = b.dataset.feature, i = obj.cats.indexOf(f);
+    if (i >= 0) obj.cats.splice(i, 1); else obj.cats.push(f);
+    b.setAttribute("aria-pressed", String(i < 0));
+    refresh(); return;
+  }
+  if (b.dataset.addModel) { state.multi.models.push(newModel()); renderForm(); return; }
+  if (b.dataset.removeModel) { state.multi.models.splice(Number(b.dataset.removeModel), 1); renderForm(); return; }
+  if (b.dataset.addCol) { state.sink.columns.push({name: "", type: "varchar"}); renderForm(); return; }
+  if (b.dataset.removeCol) { state.sink.columns.splice(Number(b.dataset.removeCol), 1); renderForm(); return; }
+});
+
+document.getElementById("btn-copy").addEventListener("click", function () {
+  var pre = document.getElementById("yaml"), status = document.getElementById("copy-status");
+  var problems = validate(state).length;
+  function done(msg) { status.textContent = msg; setTimeout(function () { status.textContent = ""; }, 4000); }
+  function fallback() {
+    var range = document.createRange(); range.selectNodeContents(pre);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    done("Текст выделен — нажмите Ctrl+C или Cmd+C.");
+  }
+  var note = problems ? " Но осталось замечаний: " + problems + "." : "";
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(pre.textContent).then(function () { done("Скопировано." + note); }, fallback);
+  } else fallback();
+});
+
+var resetArmed = false;
+document.getElementById("btn-reset").addEventListener("click", function () {
+  var b = this;
+  if (!resetArmed) {
+    resetArmed = true; b.textContent = "Точно очистить форму?";
+    setTimeout(function () { resetArmed = false; b.textContent = "Начать заново"; }, 4000);
+    return;
+  }
+  resetArmed = false; b.textContent = "Начать заново";
+  state = defaultState(); renderForm();
+});
+
+var overlay = document.getElementById("import");
+document.getElementById("btn-import").addEventListener("click", function () {
+  overlay.hidden = false; document.getElementById("import-error").hidden = true; document.getElementById("import-text").focus();
+});
+document.getElementById("import-cancel").addEventListener("click", function () { overlay.hidden = true; });
+document.getElementById("import-ok").addEventListener("click", function () {
+  var err = document.getElementById("import-error");
+  try {
+    if (typeof jsyaml === "undefined") throw new Error("не загрузилась библиотека чтения YAML — проверьте доступ к cdnjs.cloudflare.com");
+    var cfg = jsyaml.load(document.getElementById("import-text").value, {schema: jsyaml.CORE_SCHEMA});
+    if (!cfg || typeof cfg !== "object" || !cfg.dag_id) throw new Error("это не похоже на pipeline.yaml: нет dag_id");
+    state = fromConfig(cfg); overlay.hidden = true; renderForm();
+  } catch (e) { err.textContent = "Не получилось: " + e.message; err.hidden = false; }
+});
+document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden) overlay.hidden = true; });
+
+renderForm();
+</script>
