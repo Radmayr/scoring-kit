@@ -139,3 +139,15 @@ def test_form_logic_builds_valid_and_lossless_configs(tmp_path):
         assert p.dag_id == name
     assert load_pipeline(tmp_path / "out" / "t_dlh").sinks[0].mode == "replace"
     assert load_pipeline(tmp_path / "out" / "t_calib").calibrate.segments == {"seg": [1, [2, 3]]}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
+@pytest.mark.parametrize("script_id", ["team-presets", "logic", "ui"])
+def test_page_scripts_parse(tmp_path, script_id):
+    html = build_constructor(PRESETS)
+    a = html.index(f'<script id="{script_id}">')
+    code = html[html.index(">", a) + 1:html.index("</script>", a)]
+    path = tmp_path / f"{script_id}.js"
+    path.write_text(code, encoding="utf-8")
+    res = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert res.returncode == 0, res.stderr

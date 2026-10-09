@@ -79,7 +79,7 @@ textarea.short { min-height: 64px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 
 /* Выбор сценария */
-.scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 10px; }
 .scenario { text-align: left; display: grid; gap: 6px; padding: 14px; border-radius: 10px; line-height: 1.35; }
 .scenario b { font-size: 14.5px; }
 .scenario span { color: var(--muted); font-size: 13px; }
@@ -129,6 +129,7 @@ pre.yaml { margin: 0; background: var(--sunken); border: 1px solid var(--line); 
 .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; width: min(640px, 100%); display: grid; gap: 12px; }
 .modal textarea { min-height: 260px; }
 .error { color: var(--check); font-size: 13.5px; }
+.example-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); color: var(--ink); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -143,6 +144,8 @@ pre.yaml { margin: 0; background: var(--sunken); border: 1px solid var(--line); 
       <button type="button" id="btn-reset">Начать заново</button>
     </div>
   </header>
+
+  <p class="example-note" id="example-note" hidden>Сейчас в форме пример. Поменяйте поля под свой процесс или нажмите «Начать заново», чтобы очистить форму.</p>
 
   <div class="layout">
     <form class="steps" id="form" autocomplete="off" onsubmit="return false"></form>
@@ -723,7 +726,23 @@ var state = load();
 
 function load() {
   try { var raw = localStorage.getItem(STORAGE); if (raw) return mergeState(defaultState(), JSON.parse(raw)); } catch (e) {}
-  return defaultState();
+  return exampleState();
+}
+// При первом открытии форма заполнена примером, чтобы было видно, что получится.
+function exampleState() {
+  var st = defaultState();
+  st.example = true;
+  st.name = "cure_30"; st.owner = "i.ivanov";
+  st.description = "Пример: вероятность выхода клиента из просрочки 30+ за месяц";
+  st.wait = "usr_demo.cure_features";
+  st.alerts = "#scoring-alerts";
+  st.source.query = "select client_id, report_dt, dpd_days, debt_amt, payments_3m, product_cd\nfrom usr_demo.cure_features";
+  st.source.key = "client_id, report_dt";
+  st.model.mrid = "team/cure_30/1.0.0";
+  st.model.features = "dpd_days, debt_amt, payments_3m, product_cd";
+  st.model.cats = ["product_cd"];
+  st.sink.table = "usr_demo.cure_30_scores";
+  return st;
 }
 function save() { try { localStorage.setItem(STORAGE, JSON.stringify(state)); } catch (e) {} }
 
@@ -907,6 +926,7 @@ function renderForm() {
 
 function refresh() {
   var pr = validate(state);
+  document.getElementById("example-note").hidden = !state.example;
   document.getElementById("preview").innerHTML = previewTasks(state).map(function (t) {
     return '<div class="task t-' + t[0] + '"><i></i><div><b>' + esc(t[1]) + "</b><small>" + esc(t[2]) + "</small></div></div>";
   }).join("") + '<p class="hint">Запуск: ' + esc(scheduleText(state.schedule)) + "</p>";
@@ -986,6 +1006,7 @@ document.getElementById("btn-reset").addEventListener("click", function () {
   resetArmed = false; b.textContent = "Начать заново";
   state = defaultState(); renderForm();
 });
+form.addEventListener("input", function () { if (state.example) { state.example = false; refresh(); } });
 
 var overlay = document.getElementById("import");
 document.getElementById("btn-import").addEventListener("click", function () {
