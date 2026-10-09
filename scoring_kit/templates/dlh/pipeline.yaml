@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../pipeline.schema.json
+# Одна модель на DLH (Spark, DlhBatchInferenceOperator). Модель в реестре — бандл:
+#   scoring bundle pipelines/__NAME__ --model model.pkl -o bundle.pkl
+# Поменяли features/cat_features — пересоберите бандл и загрузите новую версию.
+recipe: single_model
+engine: dlh
+dag_id: __NAME__
+description: ""                         # TODO
+owner: your.login                       # TODO
+domain: collection
+schedule: "30 4 * * *"
+tags: []
+# alerts:
+#   recipients: ["#канал-команды"]
+
+wait_for:
+  tables: [usr_schema.source_table]     # TODO: таблица DLH
+
+source:
+  table: usr_schema.source_table        # TODO: таблица DLH; или query + dlh.staging_table
+  checks:
+    min_rows: 1
+    unique_key: [client_id]             # TODO
+
+dlh:
+  image: registry/path/spark-image:tag  # TODO: Spark-образ (tamli)
+
+model:
+  mrid: tenant/model_bundle/0.0.1       # TODO: mrid загруженного бандла
+  output_kind: proba
+  features: [feature_1, segment_cd, feature_2]   # TODO: в порядке обучения
+  cat_features: [segment_cd]
+  num_dtype: float32
+
+sinks:
+  - table: usr_schema.__NAME___scores   # таблица DLH, пересоздаётся целиком
+    mode: replace
+    columns:                            # всё, кроме score, переносится из источника как есть
+      client_id: bigint
+      score: numeric

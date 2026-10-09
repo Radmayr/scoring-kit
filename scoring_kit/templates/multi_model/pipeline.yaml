@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=../../pipeline.schema.json
+# Несколько моделей → несколько скоров → одна витрина. predictor.py не нужен.
+#   scoring validate pipelines/__NAME__
+recipe: multi_model
+dag_id: __NAME__
+description: ""                         # TODO
+owner: your.login                       # TODO
+domain: collection
+schedule: "0 5 * * *"                   # UTC: 05:00 UTC = 08:00 МСК
+tags: []
+# alerts:
+#   recipients: ["#канал-команды"]
+
+wait_for:
+  tables: [usr_schema.source_table]     # TODO
+
+source:
+  query: select * from usr_schema.source_table   # TODO
+  flavor: 16cpu-128ram
+  checks:
+    min_rows: 1
+    unique_key: [account_rk, due_dt]    # TODO: нужен, если у моделей разные окружения
+
+model_defaults:                         # общее для всех моделей; модель может переопределить
+  image: registry/path/image:tag        # TODO
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  flavor: 16cpu-128ram
+  output_kind: proba
+  cat_features: [segment_cd]
+  num_dtype: float32
+
+models:                                 # модели с одинаковым окружением считаются одним job'ом
+  - name: model_a
+    mrid: tenant/model_a/0.0.1          # TODO
+    score_column: score_a
+    features: [feature_1, segment_cd]   # TODO: в порядке обучения
+  - name: model_b
+    mrid: tenant/model_b/0.0.1          # TODO
+    score_column: score_b
+    features: [feature_2, feature_1, segment_cd]
+
+sinks:
+  - table: usr_schema.__NAME___scores
+    mode: replace
+    columns:
+      account_rk: bigint
+      due_dt: date
+      score_a: numeric
+      score_b: numeric

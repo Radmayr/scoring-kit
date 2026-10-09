@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=../../pipeline.schema.json
+# Обучение на лету: калибратор учится на dev (скор + созревший факт) и применяется к apply.
+#   scoring validate pipelines/__NAME__
+recipe: fit_apply
+dag_id: __NAME__
+description: ""                         # TODO
+owner: your.login                       # TODO
+domain: collection
+schedule: "0 10 * * *"                  # UTC: 10:00 UTC = 13:00 МСК
+tags: []
+# alerts:
+#   recipients: ["#канал-команды"]
+
+wait_for:
+  tables: [usr_schema.dev_calib_in, usr_schema.apply_calib_in]   # TODO
+
+dev:                                    # скользящее окно собирается в SQL
+  query: |
+    select account_rk, due_dt, cohort, base_score, base_target, product_cd
+    from usr_schema.dev_calib_in
+  min_rows: 1
+apply:
+  query: |
+    select account_rk, due_dt, cohort, base_score, product_cd
+    from usr_schema.apply_calib_in
+  key: [account_rk, due_dt]
+
+job:                                    # под без модели; нужны pandas и scikit-learn
+  image: registry/path/image:tag        # TODO
+  requirements: [pandas==2.1.4, scikit-learn==1.3.2]
+  flavor: 4cpu-16ram
+
+calibrate:
+  method: isotonic                      # isotonic | sigmoid
+  score: base_score
+  target: base_target
+  output: base_score_calib
+  segments:
+    product_cd: [CCR, CUR, [MTG, MTF]]  # TODO; список в списке — группа значений
+  cohort_column: cohort
+  train_offsets: [-3, -2]               # для когорты на позиции i — обучение на i-3 и i-2
+  uncalibrated: null                    # null — оставить пустым | copy_score
+
+sinks:
+  - table: usr_schema.__NAME___calib
+    mode: replace
+    columns:
+      account_rk: bigint
+      due_dt: date
+      base_score: numeric
+      base_score_calib: numeric
+  - table: usr_schema.__NAME___report_hist
+    data: report                        # отчёт: сегмент × когорта, объёмы, Brier до и после
+    mode: append
+    add_scored_at: true
+    actualize: false
+    columns:
+      segment: varchar
+      cohort: varchar
+      status: varchar
+      train_cohorts: varchar
+      train_rows: int
+      test_rows: int
+      apply_rows: int
+      brier_raw: numeric
+      brier_calibrated: numeric

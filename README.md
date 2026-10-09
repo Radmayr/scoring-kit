@@ -44,10 +44,10 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.3.0"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.4.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.3.0`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.4.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Процесс
@@ -55,8 +55,19 @@ pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.3.0"
 ### 1. Конфиг
 
 ```bash
-scoring new pipelines/my_model      # заготовка single_model; для других рецептов — копия примера
+scoring new pipelines/my_model                          # одна модель, встроенный предиктор
+scoring new pipelines/my_multi --recipe multi_model     # несколько моделей в одну витрину
+scoring new pipelines/my_calib --recipe fit_apply       # калибровка / обучение на лету
+scoring new pipelines/my_dlh --recipe dlh               # одна модель на DLH
+scoring new pipelines/my_model --custom-predictor       # + свой predictor.py
 ```
+
+Заготовка заполнена рабочими значениями-примерами; поля, которые надо поменять, помечены `TODO`.
+
+**Подсказки в редакторе.** В VS Code поставьте расширение YAML (Red Hat) и один раз сгенерируйте
+схему в корне репозитория процессов: `scoring schema -o pipeline.schema.json`. Дальше при наборе
+`pipeline.yaml` редактор подсказывает поля и допустимые значения, показывает описание при наведении
+и подчёркивает опечатки.
 
 Общая шапка одинакова для всех рецептов:
 
@@ -190,19 +201,25 @@ scoring debug pipelines/my_model_dlh --data sample.csv --model bundle.pkl   # и
 
 ### 7. Тень, сверка, переключение
 
-```bash
-scoring render pipelines/*/ -o build/dags                   # все боевые DAG'и инстанса
-scoring render pipelines/my_model --shadow -o build/dags    # + теневой: свой dag_id, таблицы *_shadow
-```
-
-**`mlc airflow publish` заменяет всё, что было опубликовано через mlc, содержимым папки.** DAG'и,
-которых нет в папке, с инстанса исчезают (DAG'и старого инструмента в `piper/` не затрагиваются).
-Публикуется всегда полный набор из одной папки:
+Публикация — одной командой из корня репозитория процессов:
 
 ```bash
-mlc airflow publish <инстанс> -p <проект> -i build --check   # список: должны быть ВСЕ DAG'и
-mlc airflow publish <инстанс> -p <проект> -i build
+scoring publish --env test            # собрать набор, показать список, mlc --check, спросить «да»
+scoring publish --env test --dry-run  # только собрать папку publish/ и показать список
 ```
+
+Почему не руками: `mlc airflow publish` заменяет всё, что было опубликовано через mlc, содержимым
+папки (DAG'и старого инструмента в `piper/` не затрагиваются), а тестовый и боевой инстансы пишут
+в один Greenplum. `scoring publish` собирает правильный полный набор сам:
+
+| | test | prod |
+|---|---|---|
+| процессы | теневые версии тех, что в `shadow.txt` | боевые версии всех, кроме тех, что в `shadow.txt` |
+| ручные DAG'и | `dags_manual/test/` (или `dags_manual/*.py`) | `dags_manual/prod/` |
+| черновики (`draft: true`) | не публикуются | не публикуются |
+
+Инстансы и проект — в `environments.yaml` в корне репозитория процессов. Пустой набор не
+публикуется никогда.
 
 Целевые таблицы (в том числе теневые) создаются DAG'ом при первом запуске
 (`create table if not exists` по `sinks[].columns`). После прогонов старого и теневого DAG'а:
@@ -213,8 +230,12 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 
 Критерий приёмки: `only_in_prod = only_in_shadow = 0`, `n_diff_over_tol = 0`, `n_null_mismatch = 0`.
 
-Переключение: поставить старый DAG на паузу → опубликовать боевой → вручную запустить и проверить →
-старый держать на паузе неделю (откат = снять паузу).
+Переключение: поставить старый DAG на паузу → убрать процесс из `shadow.txt` →
+`scoring publish --env prod` → вручную запустить и проверить → старый держать на паузе неделю
+(откат = снять паузу).
+
+Правка процесса: поменяли `pipeline.yaml` → `scoring validate` → `scoring publish --env test`.
+Пересобирать и публиковать отдельные файлы не нужно.
 
 ## Справочник pipeline.yaml
 
@@ -224,6 +245,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 | `dag_id`, `owner` | — | обязательные |
 | `domain`, `tags`, `description` | — | каталог, теги Airflow, документация DAG'а |
 | `schedule`, `timezone` | `null`, `UTC` | cron и его часовой пояс |
+| `draft` | `false` | черновик: проверяется, но не публикуется |
 | `alerts.recipients`, `.on_retry`, `.message` | —, `false`, `""` | уведомление при падении (`TiMeNotifier`) |
 | `gp_service`, `gp_mode` | `vrcl`, `dal` | подключение к Greenplum |
 | `time_limit`, `retries`, `retry_delay_minutes` | `7d`, `1`, `10` | для всех тасков; сенсор не перезапускается |
@@ -249,8 +271,10 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 
 | | |
 |---|---|
-| `scoring new DIR` | заготовка пайплайна |
+| `scoring new DIR [--recipe R] [--custom-predictor]` | заготовка процесса: single_model, multi_model, fit_apply, dlh |
 | `scoring validate DIR...` | проверка конфига и predictor.py (для CI) |
+| `scoring publish --env test\|prod [--dry-run] [--yes]` | собрать полный набор для инстанса и опубликовать |
+| `scoring schema [-o pipeline.schema.json]` | схема для подсказок в редакторе |
 | `scoring render DIR... [-o build/dags] [--shadow]` | генерация DAG-файлов |
 | `scoring debug DIR --data F --model M [--limit N]` | локальный прогон |
 | `scoring bundle DIR --model M -o bundle.pkl` | упаковка модели для `engine: dlh` |
@@ -292,9 +316,9 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.3.0`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.4.0`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
-(`pip wheel . --no-deps`, затем `pip install scoring-kit==0.3.0`).
+(`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 
 **Выпуск версии:** merge request → CI (тесты на версиях из подов и свежих) → поднять `version` в
 `pyproject.toml` и `scoring_kit/__init__.py` → `git tag vX.Y.Z && git push --tags` → в

@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=../../pipeline.schema.json
+# Одна модель → один скор (Greenplum). Заполните поля с пометкой TODO и проверьте:
+#   scoring validate pipelines/__NAME__
+recipe: single_model
+dag_id: __NAME__
+description: ""                         # TODO: что считает процесс (видно в Airflow и в каталоге)
+owner: your.login                       # TODO
+domain: collection
+schedule: "30 4 * * *"                  # UTC: 04:30 UTC = 07:30 МСК
+tags: []
+# alerts:
+#   recipients: ["#канал-команды"]     # сообщение при падении любого таска
+
+wait_for:
+  tables: [usr_schema.source_table]     # TODO: таблицы, по актуальности которых стартуем
+
+source:
+  query: |                              # TODO: только нужные колонки — меньше памяти, ясный контракт
+    select client_id, report_dt, feature_1, feature_2, segment_cd
+    from usr_schema.source_table
+  flavor: 4cpu-32ram
+  checks:
+    min_rows: 1
+    unique_key: [client_id]             # TODO: ключ выборки; дубли остановят процесс до скоринга
+
+model:
+  mrid: tenant/model_name/0.0.1         # TODO: из Model Registry
+  image: registry/path/image:tag        # TODO: образ, где обучали модель
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  flavor: 4cpu-32ram
+  output_kind: proba                    # proba: predict_proba()[:, 1]; predict: регрессия
+  features: [feature_1, segment_cd, feature_2]   # TODO: в порядке обучения
+  cat_features: [segment_cd]
+  num_dtype: float32                    # float32, если обучали через make_lgbm_ready
+
+sinks:
+  - table: usr_schema.__NAME___scores
+    mode: replace                       # replace | append
+    columns:                            # всё, что пишется; кроме score — должно прийти из source
+      client_id: bigint
+      report_dt: date
+      score: numeric

@@ -317,13 +317,18 @@ class Calibrate(_Strict):
 
 
 class Pipeline(_Strict):
-    recipe: Recipe = "single_model"
-    engine: Engine = "gp"
-    dag_id: str
-    description: str = ""
-    owner: str
-    domain: Optional[str] = None
-    schedule: Optional[str] = None
+    recipe: Recipe = Field(
+        "single_model",
+        description="single_model — одна модель; multi_model — несколько моделей в одну витрину; "
+        "fit_apply — обучение на лету (калибровка)",
+    )
+    engine: Engine = Field("gp", description="gp — ML Core job + Greenplum; dlh — Spark в DLH (только single_model)")
+    dag_id: str = Field(description="имя DAG'а в Airflow: буквы, цифры, _ . -")
+    description: str = Field("", description="что считает процесс; видно в Airflow и в каталоге")
+    owner: str = Field(description="логин владельца процесса")
+    domain: Optional[str] = Field(None, description="группа процессов: каталог и теги Airflow")
+    schedule: Optional[str] = Field(None, description="cron в часовом поясе timezone; null — только вручную")
+    draft: bool = Field(False, description="черновик: проверяется и собирается, но scoring publish его не публикует")
     timezone: str = "UTC"
     start_date: dt.date = dt.date(2025, 1, 1)
     tags: list[str] = []
@@ -336,10 +341,13 @@ class Pipeline(_Strict):
     wait_for: Optional[WaitFor] = None
 
     # single_model / multi_model
-    source: Optional[Source] = None
-    model: Optional[Model] = None
-    models: Optional[list[Model]] = None
-    dlh: Optional[DlhSettings] = None
+    source: Optional[Source] = Field(None, description="выборка: query (Greenplum или DLH) или table (DLH)")
+    model: Optional[Model] = Field(None, description="модель для single_model")
+    models: Optional[list[Model]] = Field(None, description="модели для multi_model")
+    model_defaults: Optional[dict] = Field(
+        None, description="общие поля для всех моделей multi_model; модель может переопределить"
+    )
+    dlh: Optional[DlhSettings] = Field(None, description="настройки engine: dlh")
 
     # fit_apply
     dev: Optional[FitApplyInput] = None

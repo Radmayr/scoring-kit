@@ -6,72 +6,63 @@ import argparse
 import sys
 from pathlib import Path
 
-from scoring_kit.spec import PipelineError, load_pipeline
+from scoring_kit.spec import IDENT_RE, PipelineError, load_pipeline
 
-PIPELINE_TEMPLATE = """\
-dag_id: {name}
-description: ""
-owner: your.login
-schedule: "30 4 * * *"      # cron, время в timezone
-timezone: UTC
-tags: []
-gp_service: vrcl
-
-wait_for:
-  tables: [schema.source_table]
-
-source:
-  query: |
-    select *
-    from schema.source_table
-  checks:
-    min_rows: 1
-    unique_key: [id]
-
-model:
-  mrid: [tenant/model_name/0.0.1]
-  image: registry/path/image:tag
-  requirements: []
-  features: [feature_1, feature_2]
-  cat_features: []
-  num_dtype: float64
-  cat_as: category
-
-sinks:
-  - table: schema.{name}_scores
-    mode: replace
-    columns:
-      id: bigint
-      score: numeric
-"""
-
-PREDICTOR_TEMPLATE = '''\
-import joblib
-
-from scoring_kit import BasePredictor  # в DAG заменится на airflow_provider_inference
-
-
-class Predictor(BasePredictor):
-    def setup(self, model_paths: list[str]):
-        # model_paths — пути к артефактам из model.mrid в том же порядке
-        self.model = joblib.load(model_paths[0])
-
-    def predict(self, df):
-        # Фичи в df уже приведены к типам контракта; порядок — self.features.
-        df["score"] = self.model.predict_proba(df[self.features])[:, 1]
-        return df
-'''
+TEMPLATES = Path(__file__).parent / "templates"
+RECIPES = ("single_model", "multi_model", "fit_apply", "dlh")
 
 
 def _cmd_new(args) -> int:
     target = Path(args.dir)
+    name = target.name
+    if not IDENT_RE.match(name):
+        print(f"Имя процесса '{name}': только строчные латинские буквы, цифры и _ (оно попадёт в имена таблиц)",
+              file=sys.stderr)
+        return 1
     if target.exists() and any(target.iterdir()):
         print(f"{target} уже существует и не пуст", file=sys.stderr)
         return 1
+    if args.custom_predictor and args.recipe != "single_model":
+        print("--custom-predictor — только для single_model", file=sys.stderr)
+        return 1
+    text = (TEMPLATES / args.recipe / "pipeline.yaml").read_text(encoding="utf-8").replace("__NAME__", name)
+    files = ["pipeline.yaml"]
+    if args.custom_predictor:
+        # свой предиктор вместо встроенного: output_kind убираем
+        text = "\n".join(
+            "  # output_kind не задан — используется predictor.py" if line.strip().startswith("output_kind:") else line
+            for line in text.splitlines()
+        ) + "\n"
+        (target / "predictor.py").parent.mkdir(parents=True, exist_ok=True)
+        (target / "predictor.py").write_text(
+            (TEMPLATES / "custom_predictor" / "predictor.py").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        files.append("predictor.py")
     target.mkdir(parents=True, exist_ok=True)
-    (target / "pipeline.yaml").write_text(PIPELINE_TEMPLATE.format(name=target.name), encoding="utf-8")
-    (target / "predictor.py").write_text(PREDICTOR_TEMPLATE, encoding="utf-8")
-    print(f"Создан {target}: pipeline.yaml, predictor.py")
+    (target / "pipeline.yaml").write_text(text, encoding="utf-8")
+    print(f"Создан {target}: {', '.join(files)} (рецепт {args.recipe}).")
+    print(f"Заполните поля с пометкой TODO и проверьте: scoring validate {target}")
+    return 0
+
+
+def _cmd_schema(args) -> int:
+    import json
+
+    from scoring_kit.spec import Pipeline
+
+    schema = Pipeline.model_json_schema()
+    schema["title"] = "scoring-kit pipeline.yaml"
+    text = json.dumps(schema, ensure_ascii=False, indent=2)
+    Path(args.out).write_text(text + "\n", encoding="utf-8")
+    print(f"Схема: {args.out}. В VS Code с расширением YAML (Red Hat) подсказки включает первая строка")
+    print("pipeline.yaml: # yaml-language-server: $schema=../../pipeline.schema.json")
+    return 0
+
+
+def _cmd_publish(args) -> int:
+    from scoring_kit.publish import publish
+
+    publish(Path(args.root), args.env, yes=args.yes, dry_run=args.dry_run)
     return 0
 
 
@@ -195,9 +186,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="scoring", description="yaml + predictor.py -> Airflow DAG скоринга")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("new", help="создать заготовку пайплайна")
-    p.add_argument("dir")
+    p = sub.add_parser("new", help="создать заготовку процесса")
+    p.add_argument("dir", help="папка процесса, например pipelines/my_model")
+    p.add_argument("--recipe", choices=RECIPES, default="single_model",
+                   help="single_model | multi_model | fit_apply | dlh (одна модель на DLH)")
+    p.add_argument("--custom-predictor", action="store_true", help="добавить свой predictor.py вместо встроенного")
     p.set_defaults(func=_cmd_new)
+
+    p = sub.add_parser("publish", help="собрать полный набор DAG'ов для инстанса и опубликовать через mlc")
+    p.add_argument("--env", required=True, help="окружение из environments.yaml: test | prod")
+    p.add_argument("--root", default=".", help="корень репозитория процессов (по умолчанию текущая папка)")
+    p.add_argument("--dry-run", action="store_true", help="только собрать папку publish и показать список")
+    p.add_argument("--yes", action="store_true", help="без вопроса о подтверждении (для CI)")
+    p.set_defaults(func=_cmd_publish)
+
+    p = sub.add_parser("schema", help="JSON Schema для подсказок в редакторе")
+    p.add_argument("-o", "--out", default="pipeline.schema.json")
+    p.set_defaults(func=_cmd_schema)
 
     p = sub.add_parser("validate", help="проверить конфиг и предиктор")
     p.add_argument("dirs", nargs="+")

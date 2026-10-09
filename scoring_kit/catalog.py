@@ -59,7 +59,7 @@ def build_catalog(dirs: list[Path]) -> str:
     for d, p in sorted(pipelines, key=lambda x: (x[1].domain or "", x[1].dag_id)):
         sources = "<br>".join(f"`{t}`" for t in _sources(p)) or "—"
         sinks = "<br>".join(f"`{s.table}` ({s.mode})" for s in p.sinks)
-        recipe = p.recipe + (f" / {p.engine}" if p.engine != "gp" else "")
+        recipe = p.recipe + (f" / {p.engine}" if p.engine != "gp" else "") + ("<br>**черновик**" if p.draft else "")
         lines.append(
             f"| **{p.dag_id}**<br>{p.description} | {recipe} | {p.owner} | {_schedule_msk(p)} | "
             f"{_models(p)} | {sources} | {sinks} |"

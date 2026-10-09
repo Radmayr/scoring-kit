@@ -134,7 +134,7 @@ a { color: var(--ours); }
 <div class="page">
 
 <header>
-  <span class="eyebrow">scoring-kit 0.3 · батч-инференс на Airflow</span>
+  <span class="eyebrow">scoring-kit 0.4 · батч-инференс на Airflow</span>
   <h1>Фабрика скоринга</h1>
   <p class="lead">Аналитик описывает процесс в одном файле <code>pipeline.yaml</code>. Фабрика проверяет описание и собирает из него DAG на операторах платформы. Ниже — из чего состоит система, какие сценарии она покрывает и как поднять её на работе.</p>
   <div class="legend" aria-label="Легенда цветов">
@@ -375,16 +375,12 @@ scoring validate pipelines/*/</pre></div>
         <ol class="steps">
           <li>Впишите в <code>shadow.txt</code> процессы, которые идут в тени: <code>pipelines/pd_model</code>, <code>pipelines/calib_pre</code>.</li>
           <li>Закройте <code>TODO</code> в их yaml: ключ, таблицы для сенсора, полный список колонок витрины (сверьте с <code>information_schema</code>).</li>
-          <li>Опубликуйте (кнопкой <code>deploy-test</code> или руками, как ниже), запустите теневые DAG'и вручную.</li>
+          <li>Опубликуйте (кнопкой <code>deploy-test</code> или командой ниже), запустите теневые DAG'и вручную.</li>
           <li>После прогона старого и теневого — сверка.</li>
         </ol>
-        <div class="cmd"><button class="copy" type="button">Копировать</button><pre><span class="c"># вручную, пока нет CI. На ТЕСТОВЫЙ инстанс — только теневые версии:</span>
-<span class="c"># он пишет в тот же Greenplum, боевые версии перезаписали бы рабочие таблицы</span>
-rm -rf publish && mkdir -p publish/dags
-scoring render pipelines/bankrupt_phis pipelines/pd_model pipelines/calib_pre --shadow -o publish/dags
-cp dags_manual/test/*.py publish/dags/
-mlc airflow publish coll-models-test -p collectionanalytics -i publish --check
-mlc airflow publish coll-models-test -p collectionanalytics -i publish
+        <div class="cmd"><button class="copy" type="button">Копировать</button><pre><span class="c"># вручную, пока нет CI: на тест уходят только теневые версии из shadow.txt</span>
+<span class="c"># + ручные DAG'и; команда покажет список и спросит подтверждение</span>
+scoring publish --env test
 
 <span class="c"># после прогонов: SQL сверки, выполнить в Greenplum</span>
 scoring compare-sql pipelines/pd_model
