@@ -228,6 +228,10 @@ class _Simulator:
             if not hasattr(model, "features"):
                 raise TypeError
         except Exception:
+            if self.p.model.packed:
+                raise ValueError(
+                    f"{path}: в конфиге packed: true — передайте файл упакованной модели (scoring_kit.pack_model)"
+                )
             # сырой файл модели: упаковываем на лету так же, как `scoring bundle`
             model = pickle.loads(pickle.dumps(bundle_from_file(path, self.p.model)))
         src = self._source_table()

@@ -11,6 +11,7 @@ import yaml
 from scoring_kit.cli import main
 from scoring_kit.constructor import (END, START, PresetsError, build_constructor, check_presets, merge_presets,
                                      presets_from_pipelines)
+from scoring_kit.render import render_dir
 from scoring_kit.spec import load_pipeline
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,8 +93,12 @@ function emit(name, st) {
 }
 let s = A.defaultState();
 Object.assign(s, {name: "t_single", owner: "u"}); Object.assign(s.source, {query: "select 1", key: "id"});
-Object.assign(s.model, {mrid: "t/m/1", features: "a, b, c", cats: ["c"]}); s.sink.table = "s.t_single";
+Object.assign(s.model, {mrid: "t/m/1", packed: false, features: "a, b, c", cats: ["c"]}); s.sink.table = "s.t_single";
 emit("t_single", s);
+s = A.defaultState();
+Object.assign(s, {name: "t_packed", owner: "u"}); Object.assign(s.source, {query: "select 1", key: "id"});
+Object.assign(s.model, {mrid: "t/m_packed/1", checkRange: false}); s.sink.table = "s.t_packed";
+emit("t_packed", s);
 s = A.defaultState(); s.recipe = "dlh"; Object.assign(s, {name: "t_dlh", owner: "u"});
 Object.assign(s.source, {mode: "table", table: "s.src", key: "id"}); Object.assign(s.model, {mrid: "t/b/1", features: "a b"});
 s.sink.table = "s.t_dlh"; s.sink.mode = "append"; emit("t_dlh", s);
@@ -102,6 +107,11 @@ Object.assign(s.source, {query: "select 1", key: "id"});
 s.multi.models = [{name: "m1", mrid: "t/m1/1", score: "s1", features: "a, c", cats: ["c"], keep: {}},
                   {name: "m2", mrid: "t/m2/1", score: "s2", features: "b, c", cats: ["c"], keep: {}}];
 s.sink.table = "s.t_multi"; emit("t_multi", s);
+s.name = "t_multi_packed"; s.sink.table = "s.t_multi_packed";
+s.multi.models = [{name: "m1", mrid: "t/m1/2", score: "s1", packed: true, features: "", cats: [], keep: {}},
+                  {name: "m2", mrid: "t/m2/2", score: "s2", packed: true, features: "", cats: [], keep: {}},
+                  {name: "m3", mrid: "t/m3/1", score: "s3", packed: false, features: "b, c", cats: ["c"], keep: {}}];
+emit("t_multi_packed", s);
 s = A.defaultState(); s.recipe = "calib"; Object.assign(s, {name: "t_calib", owner: "u"});
 Object.assign(s.calib, {devQuery: "select 1", applyQuery: "select 2", applyKey: "id", score: "p", target: "y", output: "p_cal",
   segField: "seg", segValues: "1\n2, 3", segNumeric: true});
@@ -134,9 +144,15 @@ def test_form_logic_builds_valid_and_lossless_configs(tmp_path):
             shutil.copy(ex / "predictor.py", out / "predictor.py")
         assert load_pipeline(out).model_dump() == load_pipeline(ex).model_dump(), ex.name
 
-    for name in ("t_single", "t_dlh", "t_multi", "t_calib"):
+    for name in ("t_single", "t_packed", "t_dlh", "t_multi", "t_multi_packed", "t_calib"):
         p = load_pipeline(tmp_path / "out" / name)
         assert p.dag_id == name
+        render_dir(tmp_path / "out" / name)            # из конфига собирается DAG
+    single, packed = load_pipeline(tmp_path / "out" / "t_single"), load_pipeline(tmp_path / "out" / "t_packed")
+    assert not single.model.packed and single.model.features == ["a", "b", "c"]
+    assert packed.model.packed and packed.model.features == [] and packed.model.score_range is None
+    assert load_pipeline(tmp_path / "out" / "t_dlh").model.packed          # новый процесс на DLH — упакованная модель
+    assert [m.packed for m in load_pipeline(tmp_path / "out" / "t_multi_packed").models] == [True, True, False]
     assert load_pipeline(tmp_path / "out" / "t_dlh").sinks[0].mode == "replace"
     assert load_pipeline(tmp_path / "out" / "t_calib").calibrate.segments == {"seg": [1, [2, 3]]}
 

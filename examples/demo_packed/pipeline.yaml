@@ -1,0 +1,34 @@
+# Пример: модель упакована вместе с обработкой (см. pack_model_example.py рядом).
+# В конфиге нет ни фичей, ни типов: всё лежит в самой модели из Model Registry.
+recipe: single_model
+dag_id: demo_packed
+description: Демо-скоринг упакованной моделью (обработка внутри модели)
+owner: your.login
+domain: demo
+schedule: "30 4 * * *"          # 07:30 МСК
+gp_service: vrcl
+
+wait_for:
+  tables: [sandbox.demo_features_fresh]
+
+source:
+  query: |
+    select client_id, report_dt, debt_amt, dpd_days, product_cd
+    from sandbox.demo_features_fresh
+  checks:
+    min_rows: 1
+    unique_key: [client_id, report_dt]
+
+model:
+  mrid: demo_tenant/demo_model_packed/0.0.1     # файл из pack_model, загруженный в Model Registry
+  image: registry.example/mlops/lgbm:latest
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  packed: true
+
+sinks:
+  - table: sandbox.demo_packed_scores_fresh
+    mode: replace
+    columns:
+      client_id: bigint
+      report_dt: date
+      score: numeric

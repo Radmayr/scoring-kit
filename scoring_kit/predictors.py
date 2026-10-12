@@ -23,6 +23,7 @@ def contract(model: Model) -> dict:
         "name": model.name or "model",
         "score_column": model.score_column,
         "output_kind": model.output_kind,
+        "packed": model.packed,
         "features": list(model.features),
         "cat_features": list(model.cat_features),
         "num_dtype": model.num_dtype,
@@ -49,20 +50,30 @@ def builtin_predictor_class(models: list[Model], class_name: str) -> str:
         self.loaded = []
         for contract, path in zip(self.contracts, model_paths):
             print(f"[scoring-kit] модель {contract['name']}: {path}")
-            self.loaded.append(sk_load_model(path))
+            model = sk_load_model(path)
+            if getattr(model, "scoring_kit_packed", False) and not contract["packed"]:
+                raise ValueError(
+                    f"[scoring-kit] модель {contract['name']} в реестре упакована (pack_model), "
+                    "а в конфиге этого не сказано: поставьте model.packed: true и уберите features"
+                )
+            self.loaded.append(model)
         """,
     )
     predict = _method(
         "predict",
         "self, df",
-        (runtime.sk_prepare_features, runtime.sk_model_scores, runtime.sk_check_scores),
+        (runtime.sk_prepare_features, runtime.sk_model_scores, runtime.sk_packed_scores, runtime.sk_check_scores),
         """
         n_rows = len(df)
         for contract, model in zip(self.contracts, self.loaded):
-            X = sk_prepare_features(
-                df, contract["features"], contract["cat_features"], contract["num_dtype"], contract["cat_as"]
-            )[contract["features"]]
-            df[contract["score_column"]] = sk_model_scores(model, X, contract["output_kind"])
+            if contract["packed"]:
+                scores = sk_packed_scores(model, df, contract["name"])
+            else:
+                X = sk_prepare_features(
+                    df, contract["features"], contract["cat_features"], contract["num_dtype"], contract["cat_as"]
+                )[contract["features"]]
+                scores = sk_model_scores(model, X, contract["output_kind"])
+            df[contract["score_column"]] = scores
             sk_check_scores(df, n_rows, contract["score_column"], contract["score_range"])
         return df
         """,

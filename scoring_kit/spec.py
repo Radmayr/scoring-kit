@@ -130,10 +130,12 @@ class Model(_Strict):
     predictor: str = "predictor.py"
     predictor_class: str = "Predictor"
     output_kind: Optional[Literal["proba", "predict"]] = None
+    # Модель упакована scoring_kit.pack_model: обработка, фичи и типы лежат в самом объекте из реестра.
+    packed: bool = False
     flavor: str = DEFAULT_FLAVOR
     batch_size: int = Field(default=100_000, gt=0)
     # Порядок features = порядок колонок, на которых обучалась модель.
-    features: list[str] = Field(min_length=1)
+    features: list[str] = []
     cat_features: list[str] = []
     num_dtype: Literal["float32", "float64"] = "float64"
     # category — для LightGBM (pandas category), str — для CatBoost (строки, пропуск = "nan").
@@ -164,6 +166,20 @@ class Model(_Strict):
     def _cats_subset(self):
         _check_idents(self.cat_features, "model.cat_features")
         _check_idents(self.output_columns, "model.output_columns")
+        if self.packed:
+            if self.features or self.cat_features:
+                raise ValueError(
+                    "model.packed: true — фичи и типы уже лежат в упакованной модели, уберите features и cat_features"
+                )
+            if len(self.mrid) != 1:
+                raise ValueError("model.packed: true — ровно один mrid (упакованная модель)")
+            if self.output_columns:
+                raise ValueError("model.packed: true — model.output_columns не поддерживаются")
+        elif not self.features:
+            raise ValueError(
+                "model.features: перечислите фичи в порядке обучения "
+                "(или packed: true, если модель упакована scoring_kit.pack_model)"
+            )
         extra = [c for c in self.cat_features if c not in self.features]
         if extra:
             raise ValueError(f"model.cat_features не входят в features: {extra}")
@@ -175,7 +191,7 @@ class Model(_Strict):
 
     @property
     def builtin(self) -> bool:
-        return self.output_kind is not None
+        return self.output_kind is not None or self.packed
 
     @property
     def runtime_key(self) -> tuple:
@@ -412,7 +428,10 @@ class Pipeline(_Strict):
             if len(m.mrid) != 1:
                 raise ValueError("engine: dlh — ровно одна модель (mrid упакованной модели, см. scoring bundle)")
             if not m.builtin:
-                raise ValueError("engine: dlh — свой predictor.py не поддерживается; укажите model.output_kind")
+                raise ValueError(
+                    "engine: dlh — свой predictor.py не поддерживается; упакуйте модель (packed: true) "
+                    "или укажите model.output_kind"
+                )
             if m.output_columns:
                 raise ValueError("engine: dlh — model.output_columns не поддерживаются")
             if len(self.sinks) != 1 or self.sinks[0].mode != "replace":
@@ -455,6 +474,7 @@ class Pipeline(_Strict):
         kinds: dict[str, tuple[str, str]] = {}
         for m in self.models:
             for f in m.features:
+                # у упакованных моделей features пуст: типы каждая приводит сама
                 kind = ("cat", m.cat_as) if f in m.cat_features else ("num", m.num_dtype)
                 if kinds.setdefault(f, kind) != kind:
                     raise ValueError(f"фича {f}: разные типы в разных моделях ({kinds[f]} и {kind})")

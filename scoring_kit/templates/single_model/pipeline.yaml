@@ -28,6 +28,8 @@ model:
   image: registry/path/image:tag        # TODO: образ, где обучали модель
   requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
   flavor: 4cpu-32ram
+  # Если модель упакована вместе с обработкой (scoring_kit.pack_model), оставьте вместо строк ниже
+  # одну: packed: true
   output_kind: proba                    # proba: predict_proba()[:, 1]; predict: регрессия
   features: [feature_1, segment_cd, feature_2]   # TODO: в порядке обучения
   cat_features: [segment_cd]

@@ -129,6 +129,10 @@ pre.yaml { margin: 0; background: var(--sunken); border: 1px solid var(--line); 
 .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; width: min(640px, 100%); display: grid; gap: 12px; }
 .modal textarea { min-height: 260px; }
 .error { color: var(--check); font-size: 13.5px; }
+details.help { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: var(--sunken); }
+details.help summary { cursor: pointer; font-weight: 500; font-size: 14px; color: var(--ours); }
+details.help p { font-size: 13.5px; margin-block: 8px; }
+details.help pre.yaml { background: var(--surface); max-height: none; }
 .example-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); color: var(--ink); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -233,7 +237,7 @@ function defaultState() {
     alerts: "", wait: "", size: "medium", flavors: {},
     source: {mode: "query", query: "", table: "", key: "", minRows: 1, staging: ""},
     model: {mrid: "", image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", custom: false,
-      scoreColumn: "score", features: "", cats: [], float32: true},
+      packed: true, checkRange: true, scoreColumn: "score", features: "", cats: [], float32: true},
     multi: {image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", float32: true,
       models: [newModel(), newModel()]},
     calib: {devQuery: "", applyQuery: "", applyKey: "", score: "", target: "", output: "", method: "isotonic",
@@ -245,7 +249,9 @@ function defaultState() {
     keep: {}
   };
 }
-function newModel() { return {name: "", mrid: "", score: "", features: "", cats: [], keep: {}}; }
+function newModel() { return {name: "", mrid: "", score: "", packed: true, features: "", cats: [], keep: {}}; }
+// Упакованная модель (scoring_kit.pack_model): обработка, фичи и типы лежат в объекте из реестра.
+function isPacked(m) { return !!m.packed && !m.custom; }
 
 // Сохранённый черновик мог быть сделан старой версией страницы: недостающие поля берём из умолчаний.
 function mergeState(def, saved) {
@@ -456,12 +462,14 @@ function buildYaml(st) {
     if (st.recipe === "multi") {
       var mm = st.multi, img = imageOf(mm.image, mm.customImage, mm.customReq);
       out.push(["model_defaults:", "  image: " + q(img.image), "  requirements: " + list(img.requirements)]
-        .concat(fl("model_defaults", 2), ["  output_kind: " + mm.outputKind, "  num_dtype: " + (mm.float32 ? "float32" : "float64")],
+        .concat(fl("model_defaults", 2), mm.models.every(isPacked) ? [] :
+          ["  output_kind: " + mm.outputKind, "  num_dtype: " + (mm.float32 ? "float32" : "float64")],
           kept("model_defaults", 2)).join("\n"));
       out.push("models:\n" + mm.models.map(function (m) {
-        var f = words(m.features);
-        return ["  - name: " + q(m.name), "    mrid: " + q(m.mrid), "    score_column: " + q(m.score), "    features: " + list(f),
-          "    cat_features: " + list(m.cats.filter(function (x) { return f.indexOf(x) >= 0; }))].concat(yLines(m.keep, 4)).join("\n");
+        var f = words(m.features), head = ["  - name: " + q(m.name), "    mrid: " + q(m.mrid), "    score_column: " + q(m.score)];
+        var body = isPacked(m) ? ["    packed: true"] : ["    features: " + list(f),
+          "    cat_features: " + list(m.cats.filter(function (x) { return f.indexOf(x) >= 0; }))];
+        return head.concat(body, yLines(m.keep, 4)).join("\n");
       }).join("\n"));
     } else {
       var md = st.model, feats = words(md.features);
@@ -471,11 +479,17 @@ function buildYaml(st) {
         ml.push("  image: " + q(im.image), "  requirements: " + list(im.requirements));
         ml = ml.concat(fl("model", 2));
       }
-      if (!md.custom) ml.push("  output_kind: " + md.outputKind);
-      if ((md.scoreColumn || "score") !== "score") ml.push("  score_column: " + q(md.scoreColumn));
-      ml.push("  features: " + list(feats), "  cat_features: " + list(md.cats.filter(function (x) { return feats.indexOf(x) >= 0; })),
-        "  num_dtype: " + (md.float32 ? "float32" : "float64"));
-      if (md.outputKind === "predict" && !md.custom) ml.push("  score_range: null");
+      if (isPacked(md)) {
+        ml.push("  packed: true    # обработка, фичи и типы — внутри модели (scoring_kit.pack_model)");
+        if ((md.scoreColumn || "score") !== "score") ml.push("  score_column: " + q(md.scoreColumn));
+        if (!md.checkRange) ml.push("  score_range: null");
+      } else {
+        if (!md.custom) ml.push("  output_kind: " + md.outputKind);
+        if ((md.scoreColumn || "score") !== "score") ml.push("  score_column: " + q(md.scoreColumn));
+        ml.push("  features: " + list(feats), "  cat_features: " + list(md.cats.filter(function (x) { return feats.indexOf(x) >= 0; })),
+          "  num_dtype: " + (md.float32 ? "float32" : "float64"));
+        if (md.outputKind === "predict" && !md.custom) ml.push("  score_range: null");
+      }
       out.push(ml.concat(kept("model", 2)).join("\n"));
     }
   }
@@ -538,12 +552,15 @@ function validate(st) {
     if (!mrids.length || !mrids.every(function (x) { return MRID.test(x); })) add(4, "Ссылка на модель из Model Registry: вид команда/модель/версия.");
     if (mrids.length > 1 && !md.custom) add(4, "Несколько ссылок на модель бывают только со своим predictor.py — оставьте одну.");
     if (!IDENT.test(md.scoreColumn || "")) add(4, "Колонка скора — латиницей, например score.");
-    if (!f.length) add(4, "Перечислите фичи модели в порядке обучения.");
-    f.forEach(function (x) { if (!IDENT.test(x)) add(4, "Фича «" + x + "»: только строчные латинские буквы, цифры и _."); });
-    if (uniq(f).length !== f.length) add(4, "В списке фичей есть повторы.");
+    if (!isPacked(md)) {
+      if (!f.length) add(4, "Перечислите фичи модели в порядке обучения (или отметьте, что модель упакована).");
+      f.forEach(function (x) { if (!IDENT.test(x)) add(4, "Фича «" + x + "»: только строчные латинские буквы, цифры и _."); });
+      if (uniq(f).length !== f.length) add(4, "В списке фичей есть повторы.");
+    }
+    if (isPacked(md) && mrids.length > 1) add(4, "У упакованной модели одна ссылка в Model Registry.");
     if (st.recipe === "single" && imageOf(md.image, md.customImage, md.customReq).image === "") add(4, "Выберите окружение модели.");
     if (st.recipe === "dlh" && imageOf(st.spark, st.customSpark, "").image === "") add(4, "Выберите Spark-образ.");
-    if (st.recipe === "dlh" && md.custom) add(4, "На DLH свой predictor.py не поддерживается — нужен бандл модели.");
+    if (st.recipe === "dlh" && md.custom) add(4, "На DLH свой predictor.py не поддерживается — упакуйте модель вместе с обработкой.");
   }
   if (st.recipe === "multi") {
     var mm = st.multi, names = [], scores = [], kinds = {};
@@ -554,9 +571,9 @@ function validate(st) {
       if (!IDENT.test(m.name)) add(4, n + "короткое имя латиницей, например pd_30.");
       if (!MRID.test(m.mrid)) add(4, n + "ссылка из Model Registry вида команда/модель/версия.");
       if (!IDENT.test(m.score)) add(4, n + "имя колонки скора латиницей, например score_30.");
-      if (!mf.length) add(4, n + "перечислите фичи.");
+      if (!isPacked(m) && !mf.length) add(4, n + "перечислите фичи (или отметьте, что модель упакована).");
       names.push(m.name); scores.push(m.score);
-      mf.forEach(function (x) {
+      if (!isPacked(m)) mf.forEach(function (x) {
         var kind = m.cats.indexOf(x) >= 0 ? "cat" : "num";
         if (kinds[x] && kinds[x] !== kind) add(4, "Фича «" + x + "» категориальная в одной модели и числовая в другой.");
         kinds[x] = kind;
@@ -588,13 +605,13 @@ function previewTasks(st) {
   if (st.recipe === "dlh") {
     if (st.source.mode === "query") t.push(["ours", "prepare_source", "запрос → " + (st.source.staging || "промежуточная таблица")]);
     t.push(["check", "check_source", "строки, дубли ключа, колонки"]);
-    t.push(["plat", "inference (Spark)", "модель " + (st.model.mrid || "…")]);
+    t.push(["plat", "inference (Spark)", (isPacked(st.model) ? "упакованная модель " : "модель ") + (st.model.mrid || "…")]);
     t.push(["check", "check_result", "результат в " + sink]);
     return t;
   }
   t.push(["check", "read_source", "выборка + проверки: пусто? ключ? колонки?"]);
   if (st.recipe === "multi") t.push(["plat", "inference", st.multi.models.length + " модели → " + scoreColumns(st).join(", ")]);
-  else t.push(["plat", "inference", (st.model.custom ? "свой predictor.py, " : "") + "модель " + (st.model.mrid || "…")]);
+  else t.push(["plat", "inference", (st.model.custom ? "свой predictor.py, " : isPacked(st.model) ? "обработка внутри, " : "") + "модель " + (st.model.mrid || "…")]);
   t.push(["ours", "write → " + sink, st.sink.mode === "append" ? "дописать строки" : "заменить содержимое"]);
   t.push(["data", "harmonize · actualize", "гранты и отметка актуальности"]);
   return t;
@@ -646,11 +663,14 @@ function fromConfig(cfg) {
   if (cfg.model) {
     var m = cfg.model, mi = pick(m.image, m.requirements, "model");
     st.model = {mrid: [].concat(m.mrid || []).join(", "), image: mi.id, customImage: mi.custom, customReq: mi.req,
-      outputKind: m.output_kind || "proba", custom: !m.output_kind, scoreColumn: m.score_column || "score",
+      outputKind: m.output_kind || "proba", custom: !m.output_kind && !m.packed, packed: !!m.packed,
+      checkRange: m.score_range !== null, scoreColumn: m.score_column || "score",
       features: (m.features || []).join(", "), cats: (m.cat_features || []).slice(), float32: m.num_dtype === "float32"};
     flavors.model = m.flavor;
-    var handled = ["mrid", "image", "requirements", "flavor", "output_kind", "score_column", "features", "cat_features", "num_dtype"];
-    if (m.output_kind === "predict" && m.score_range === null) handled.push("score_range");
+    var handled = ["mrid", "image", "requirements", "flavor", "score_column", "packed"];
+    // У упакованной модели тип результата и типы фичей не используются: если они есть в конфиге, оставляем как были.
+    if (!m.packed) handled = handled.concat(["output_kind", "features", "cat_features", "num_dtype"]);
+    if (m.score_range === null && (m.packed || m.output_kind === "predict")) handled.push("score_range");
     keep.model = rest(m, handled);
   }
   if (cfg.models) {
@@ -660,11 +680,11 @@ function fromConfig(cfg) {
     st.multi = {image: di.id, customImage: di.custom, customReq: di.req, outputKind: d.output_kind || first.output_kind || "proba",
       float32: (d.num_dtype || first.num_dtype) === "float32",
       models: cfg.models.map(function (x) {
-        var own = rest(x, ["name", "mrid", "score_column", "features", "cat_features"]) || {};
+        var own = rest(x, ["name", "mrid", "score_column", "features", "cat_features", "packed"]) || {};
         // Совпадающее с общими настройками не дублируем в модели.
         if (own.image === dImage) delete own.image;
         if (JSON.stringify(own.requirements) === JSON.stringify(dReq)) delete own.requirements;
-        return {name: x.name || "", mrid: [].concat(x.mrid || [])[0] || "", score: x.score_column || "",
+        return {name: x.name || "", mrid: [].concat(x.mrid || [])[0] || "", score: x.score_column || "", packed: !!x.packed,
           features: (x.features || []).join(", "), cats: (x.cat_features || d.cat_features || []).slice(), keep: own};
       })};
     flavors.model_defaults = d.flavor;
@@ -739,8 +759,6 @@ function exampleState() {
   st.source.query = "select client_id, report_dt, dpd_days, debt_amt, payments_3m, product_cd\nfrom usr_demo.cure_features";
   st.source.key = "client_id, report_dt";
   st.model.mrid = "team/cure_30/1.0.0";
-  st.model.features = "dpd_days, debt_amt, payments_3m, product_cd";
-  st.model.cats = ["product_cd"];
   st.sink.table = "usr_demo.cure_30_scores";
   return st;
 }
@@ -773,7 +791,7 @@ function select(path, label, options, opts) {
     }).join("") + "</select>" + (opts.hint ? "<small>" + opts.hint + "</small>" : "") + "</label>";
 }
 function checkbox(path, label) {
-  return '<label class="check"><input type="checkbox" data-bind="' + path + '" id="' + fid(path) + '"' + (get(path) ? " checked" : "") + "> " + label + "</label>";
+  return '<label class="check"><input type="checkbox" data-bind="' + path + '" id="' + fid(path) + '"' + (get(path) ? " checked" : "") + "> <span>" + label + "</span></label>";
 }
 function imageSelect(prefix, kind, label, customPath, reqPath) {
   var opts = presetsOf(kind).map(function (p) { return [p.id, p.label]; }).concat([["custom", "Другой образ…"]]);
@@ -794,6 +812,29 @@ function catChips(path, featuresText, cats) {
   return '<div class="field"><span>Категориальные фичи</span><div class="chips">' + f.map(function (x) {
     return '<button type="button" class="chip" data-cat="' + path + '" data-feature="' + esc(x) + '" aria-pressed="' + (cats.indexOf(x) >= 0) + '">' + esc(x) + "</button>";
   }).join("") + "</div><small>Нажмите на фичу, чтобы отметить её категориальной (продукт, статус, код). Остальные считаются числовыми.</small></div>";
+}
+function packHelp() {
+  var code = [
+    "from scoring_kit import pack_model",
+    "",
+    "def prepare(df):                      # своя обработка: сырые колонки -> фичи модели",
+    "    df[\"debt_log\"] = np.log1p(df[\"debt_amt\"])",
+    "    df[\"dpd_days\"] = df[\"dpd_days\"].fillna(-1)",
+    "    return df",
+    "",
+    "pack_model(",
+    "    model,                            # обученная модель",
+    "    features=[\"debt_log\", \"dpd_days\", \"product_cd\"],   # в порядке обучения",
+    "    cat_features=[\"product_cd\"],",
+    "    prepare=prepare,                  # можно не указывать, если обработки нет",
+    "    sample=raw_df.head(1000),         # сырая выборка: упаковка сверит скоры до и после",
+    "    path=\"model_packed.pkl\",          # этот файл загрузить в Model Registry",
+    ")"
+  ].join("\n");
+  return '<details class="help"><summary>Как упаковать модель</summary>' +
+    "<p>Выполните в ноутбуке, где обучали модель. Упаковка проверит, что скоры до и после совпадают, и покажет, что попало внутрь. " +
+    "Обработка едет вместе с моделью, поэтому в процессе её задавать не нужно — ни здесь, ни в DLH.</p>" +
+    '<pre class="yaml">' + esc(code) + "</pre></details>";
 }
 function plural(n, a, b, c) { var m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c; }
 function stepHead(n, title) {
@@ -854,30 +895,43 @@ function renderForm() {
 
   var m = '<section class="step">' + stepHead(4, r === "calib" ? "Калибровка" : r === "multi" ? "Модели" : "Модель");
   if (r === "single" || r === "dlh") {
-    m += input("model.mrid", r === "dlh" ? "Ссылка на упакованную модель (бандл)" : "Ссылка на модель в Model Registry", {ph: "team/model_name/1.0.0",
-      hint: r === "dlh" ? "Бандл делается из обычной модели командой scoring bundle — попросите администратора." : "Скопируйте из интерфейса Model Registry, версию указывайте явно."});
+    m += input("model.mrid", "Ссылка на модель в Model Registry", {ph: "team/model_name/1.0.0",
+      hint: "Скопируйте из интерфейса Model Registry, версию указывайте явно."});
     m += r === "single" ? imageSelect("model.image", "model", "Окружение модели", "model.customImage", "model.customReq")
       : imageSelect("spark", "spark", "Spark-образ", "customSpark", null);
-    m += state.model.custom
-      ? '<p class="hint">У процесса свой <code>predictor.py</code>: логика модели в нём, файл лежит в папке процесса и конструктором не меняется.</p>'
-      : '<div class="grid2">' + select("model.outputKind", "Что выдаёт модель", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
+    if (state.model.custom) {
+      m += '<p class="hint">У процесса свой <code>predictor.py</code>: логика модели в нём, файл лежит в папке процесса и конструктором не меняется.</p>';
+    } else {
+      m += checkbox("model.packed", "Модель упакована вместе с обработкой (<code>pack_model</code>) — рекомендуется");
+    }
     m += '<div class="grid2">' + input("model.scoreColumn", "Колонка скора", {ph: "score", rerender: true}) + "</div>";
-    m += input("model.features", "Фичи — в том порядке, в котором модель обучалась", {textarea: true, short: true, rerender: true,
-      ph: "feature_1, feature_2, segment_cd", hint: "Можно вставить списком из ноутбука: через запятую, пробел или с новой строки."});
-    m += catChips("model", state.model.features, state.model.cats);
-    m += checkbox("model.float32", "Числа приводились к float32 при обучении (как make_lgbm_ready)");
+    if (isPacked(state.model)) {
+      m += checkbox("model.checkRange", "Скор — вероятность: останавливать процесс, если он вне диапазона от 0 до 1");
+      m += packHelp();
+    } else {
+      if (!state.model.custom) m += '<div class="grid2">' + select("model.outputKind", "Что выдаёт модель", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
+      m += input("model.features", "Фичи — в том порядке, в котором модель обучалась", {textarea: true, short: true, rerender: true,
+        ph: "feature_1, feature_2, segment_cd", hint: "Можно вставить списком из ноутбука: через запятую, пробел или с новой строки."});
+      m += catChips("model", state.model.features, state.model.cats);
+      m += checkbox("model.float32", "Числа приводились к float32 при обучении (как make_lgbm_ready)");
+      if (!state.model.custom) m += '<p class="hint">Так модель получает только приведение типов. Если перед ней нужна своя обработка, упакуйте модель вместе с ней.</p>';
+    }
   } else if (r === "multi") {
     m += imageSelect("multi.image", "model", "Окружение моделей", "multi.customImage", "multi.customReq");
-    m += '<div class="grid2">' + select("multi.outputKind", "Что выдают модели", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
-    m += checkbox("multi.float32", "Числа приводились к float32 при обучении (как make_lgbm_ready)");
+    if (!state.multi.models.every(isPacked)) {
+      m += '<div class="grid2">' + select("multi.outputKind", "Что выдают неупакованные модели", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
+      m += checkbox("multi.float32", "Числа приводились к float32 при обучении (как make_lgbm_ready)");
+    }
+    m += packHelp();
     state.multi.models.forEach(function (md, i) {
       var p = "multi.models." + i;
       m += '<div class="model-card"><div class="row"><b>Модель ' + (i + 1) + "</b>" +
         (state.multi.models.length > 2 ? '<button type="button" class="link" data-remove-model="' + i + '">Убрать</button>' : "") + "</div>" +
         '<div class="grid2">' + input(p + ".name", "Короткое имя", {ph: "pd_30"}) + input(p + ".score", "Колонка скора", {ph: "score_30", rerender: true}) + "</div>" +
         input(p + ".mrid", "Ссылка в Model Registry", {ph: "team/pd_30/1.0.0"}) +
-        input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd"}) +
-        catChips(p, md.features, md.cats) + "</div>";
+        checkbox(p + ".packed", "Упакована вместе с обработкой (<code>pack_model</code>)") +
+        (isPacked(md) ? "" : input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd"}) +
+          catChips(p, md.features, md.cats)) + "</div>";
     });
     m += '<div><button type="button" class="small" data-add-model="1">+ Добавить модель</button></div>';
   } else {

@@ -44,10 +44,10 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.5.1"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.6.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.5.1`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.6.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Конструктор: процесс без программирования
@@ -104,9 +104,55 @@ wait_for:
   tables: [schema.features_fresh]   # сенсор актуальности
 ```
 
-### 2. Модель: встроенный предиктор или свой
+### 2. Модель: упакованная, обычная или свой предиктор
 
-Для бустингов код не нужен:
+**Упакованная модель — основной способ.** Автор модели в ноутбуке упаковывает её вместе со своей
+обработкой и кладёт файл в Model Registry:
+
+```python
+from scoring_kit import pack_model
+
+def prepare(df):                          # своя обработка: сырые колонки выборки -> фичи модели
+    df["debt_log"] = np.log1p(df["debt_amt"])
+    df["dpd_days"] = df["dpd_days"].fillna(-1)
+    return df
+
+pack_model(
+    model,                                # LightGBM, CatBoost или любая модель с predict / predict_proba
+    features=["debt_log", "dpd_days", "product_cd"],    # в порядке обучения
+    cat_features=["product_cd"],
+    prepare=prepare,                      # можно не указывать, если обработки нет
+    sample=raw_df.head(1000),             # сырая выборка, как из SQL процесса
+    num_dtype="float32",                  # если при обучении числа приводили к float32
+    path="model_packed.pkl",              # этот файл загрузить в Model Registry
+)
+```
+
+В процессе остаётся одна строка:
+
+```yaml
+model:
+  mrid: tenant/model_packed/1.0.0
+  image: <образ>
+  requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
+  packed: true                      # обработка, фичи и типы — внутри модели
+```
+
+Что делает упаковка:
+- обработка едет вместе с моделью, переносить её в процесс руками не нужно; один и тот же файл
+  работает и в Greenplum, и в DLH;
+- по `sample` сама определяет, какие сырые колонки нужны, считает скоры «по шагам в ноутбуке» и
+  через упакованный объект и сравнивает их; расхождение — ошибка, файл не создаётся;
+- проверяет, что `prepare` не зависит от ноутбука: всё, кроме `np` и `pd`, должно импортироваться
+  или определяться внутри функции; `prepare` не удаляет и не переставляет строки;
+- LightGBM и CatBoost хранит в переносимом виде, поэтому версии библиотек в поде могут отличаться
+  от обучения; остальные модели хранятся через pickle, для них версии должны совпадать.
+
+`scoring describe model_packed.pkl` показывает, что внутри: обработку, фичи, типы. Если
+scoring-kit в среду с ноутбуком не поставить, `scoring packer` выгружает упаковщик одним файлом
+`scoring_pack.py` без зависимостей: `from scoring_pack import pack_model`.
+
+**Обычная модель** — когда обработки нет и достаточно приведения типов:
 
 ```yaml
 model:
@@ -119,7 +165,8 @@ model:
   num_dtype: float32                # если при обучении приводили к float32 (make_lgbm_ready)
 ```
 
-Нестандартная логика — свой `predictor.py` (без `output_kind`):
+**Свой `predictor.py`** (без `output_kind` и `packed`) — для исключительных случаев, только
+`single_model` на Greenplum:
 
 ```python
 import joblib
@@ -140,6 +187,9 @@ class Predictor(BasePredictor):
 Правила для `predictor.py` (в под передаётся только исходник класса): на верхнем уровне — только
 `import` и класс; константы — атрибутами класса, функции — методами; `predict` получает батч и
 возвращает DataFrame той же длины с колонкой скора.
+
+Если в конфиге и в реестре записано разное (в конфиге `packed: true`, а в реестре обычная модель,
+или наоборот), процесс остановится на инференсе с сообщением, что поправить.
 
 ### 3. Несколько моделей
 
@@ -184,22 +234,16 @@ sinks:
 
 ### 5. DLH (engine: dlh)
 
-`DlhBatchInferenceOperator` вызывает `model.predict(df)` в Spark-образе с другими версиями
-библиотек (lightgbm 4.x, numpy 2, pandas 3). Поэтому в реестр кладётся **бандл**:
+`DlhBatchInferenceOperator` умеет только вызвать `model.predict(df)`, причём в Spark-образе с
+другими версиями библиотек (lightgbm 4.x, numpy 2, pandas 3). Поэтому на DLH модель всегда
+упакованная: тот же `pack_model`, что и для Greenplum, и `packed: true` в конфиге. Список входных
+колонок оператор берёт из самой модели. Проверено: модель, упакованная на lightgbm 3.3.5, даёт те
+же скоры в окружении lightgbm 4.7 / numpy 2 / pandas 3 без установленного scoring-kit.
 
-```bash
-scoring bundle pipelines/my_model_dlh --model model.pkl -o bundle.pkl
-```
-
-Бандл хранит модель в переносимом виде (текст модели LightGBM / байты CatBoost), сам приводит типы
-фичей по контракту из yaml и восстанавливается без scoring-kit в образе. Загрузите `bundle.pkl` в
-Model Registry новой версией и укажите её mrid в `model.mrid`. Проверено: скоры бандла в
-окружении lightgbm 4.7 / numpy 2 / pandas 3 совпадают с исходной моделью на lightgbm 3.3.5 бит в бит.
-
-Во время работы оператор берёт фичи из бандла, но `features`/`cat_features` в yaml всё равно нужны:
-из них собирается бандл (его можно пересобрать из исходной модели и yaml), по ним `check_source`
-проверяет колонки источника до запуска Spark, и они видны в каталоге. **Изменили фичи в yaml —
-пересоберите бандл и загрузите новую версию**, иначе проверка и модель разойдутся.
+Старый способ тоже работает: `features` в yaml и упаковка командой
+`scoring bundle pipelines/my_model_dlh --model model.pkl -o bundle.pkl` (с обработкой —
+`--prepare prepare.py --input-columns a,b,c`). Тогда при изменении фичей в yaml бандл нужно
+пересобрать.
 
 Источник — `source.table` (таблица DLH) или `source.query` + `dlh.staging_table` (запрос
 материализуется в таблицу: оператор читает только таблицу целиком). Приёмник — один, `replace`
@@ -298,7 +342,9 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 | `scoring schema [-o pipeline.schema.json]` | схема для подсказок в редакторе |
 | `scoring render DIR... [-o build/dags] [--shadow]` | генерация DAG-файлов |
 | `scoring debug DIR --data F --model M [--limit N]` | локальный прогон |
-| `scoring bundle DIR --model M -o bundle.pkl` | упаковка модели для `engine: dlh` |
+| `scoring describe FILE` | что внутри упакованной модели: обработка, фичи, типы |
+| `scoring packer [-o scoring_pack.py]` | упаковщик моделей одним файлом для ноутбуков без scoring-kit |
+| `scoring bundle DIR --model M -o bundle.pkl [--prepare F --input-columns a,b]` | упаковка по фичам из yaml |
 | `scoring catalog DIR... [-o CATALOG.md]` | каталог: процессы, владельцы, модели, таблицы, зависимости |
 | `scoring ddl DIR [--shadow]` | `create table` приёмников |
 | `scoring compare-sql DIR [--key a,b] [--tol 1e-9]` | SQL сверки прода с тенью |
@@ -337,7 +383,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.5.1`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.6.0`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
 (`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 

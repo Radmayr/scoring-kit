@@ -144,19 +144,49 @@ def _cmd_debug(args) -> int:
 def _cmd_bundle(args) -> int:
     import pickle
 
-    from scoring_kit.bundle import bundle_from_file
+    from scoring_kit.bundle import PackError, bundle_from_file
 
     pipeline = load_pipeline(args.dir)
     if pipeline.model is None:
         print("Ошибка: scoring bundle — для recipe: single_model", file=sys.stderr)
         return 1
-    bundle = bundle_from_file(args.model, pipeline.model)
+    if pipeline.model.packed:
+        print("Ошибка: в конфиге packed: true — фичи лежат в самой модели. Упаковывайте её функцией "
+              "scoring_kit.pack_model в ноутбуке (или уберите packed и задайте features)", file=sys.stderr)
+        return 1
+    columns = [c.strip() for c in args.input_columns.split(",") if c.strip()] if args.input_columns else None
+    try:
+        bundle = bundle_from_file(args.model, pipeline.model, args.prepare, columns)
+    except PackError as e:
+        print(f"Ошибка: {e}", file=sys.stderr)
+        return 1
     out = Path(args.out)
     out.write_bytes(pickle.dumps(bundle))
     # Самопроверка: бандл восстанавливается из файла.
     restored = pickle.loads(out.read_bytes())
-    print(f"Бандл: {out} ({out.stat().st_size // 1024} КБ), фичей: {len(restored.features)}")
+    print(f"Бандл: {out} ({out.stat().st_size // 1024} КБ), входных колонок: {len(restored.features)}")
     print("Загрузите файл в Model Registry новой версией и укажите её mrid в model.mrid.")
+    return 0
+
+
+def _cmd_describe(args) -> int:
+    from scoring_kit.bundle import PackError, load_packed
+
+    try:
+        print(load_packed(args.file).describe())
+    except (PackError, OSError) as e:
+        print(f"Ошибка: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_packer(args) -> int:
+    from scoring_kit.bundle import standalone_source
+
+    Path(args.out).write_text(standalone_source(), encoding="utf-8")
+    name = Path(args.out).stem
+    print(f"Упаковщик одним файлом: {args.out}")
+    print(f"Положите его рядом с ноутбуком и используйте: from {name} import pack_model")
     return 0
 
 
@@ -254,7 +284,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dir")
     p.add_argument("--model", required=True, help="файл исходной модели (joblib/pickle LightGBM или CatBoost)")
     p.add_argument("-o", "--out", required=True, help="куда сохранить бандл (.pkl)")
+    p.add_argument("--prepare", help="файл .py со своей обработкой: def prepare(df): ...; return df")
+    p.add_argument("--input-columns", help="сырые колонки для обработки через запятую (нужны вместе с --prepare)")
     p.set_defaults(func=_cmd_bundle)
+
+    p = sub.add_parser("describe", help="показать, что внутри упакованной модели: обработка, фичи, типы")
+    p.add_argument("file", help="файл упакованной модели (.pkl)")
+    p.set_defaults(func=_cmd_describe)
+
+    p = sub.add_parser("packer", help="упаковщик моделей одним файлом — для ноутбуков, куда scoring-kit не установить")
+    p.add_argument("-o", "--out", default="scoring_pack.py")
+    p.set_defaults(func=_cmd_packer)
 
     p = sub.add_parser("catalog", help="каталог процессов: владельцы, модели, таблицы, зависимости")
     p.add_argument("dirs", nargs="+")

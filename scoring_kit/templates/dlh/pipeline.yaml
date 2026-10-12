@@ -26,11 +26,8 @@ dlh:
   image: registry/path/spark-image:tag  # TODO: Spark-образ (tamli)
 
 model:
-  mrid: tenant/model_bundle/0.0.1       # TODO: mrid загруженного бандла
-  output_kind: proba
-  features: [feature_1, segment_cd, feature_2]   # TODO: в порядке обучения
-  cat_features: [segment_cd]
-  num_dtype: float32
+  mrid: tenant/model_packed/0.0.1       # TODO: mrid модели, упакованной scoring_kit.pack_model
+  packed: true                          # обработка, фичи и типы — внутри модели
 
 sinks:
   - table: usr_schema.__NAME___scores   # таблица DLH, пересоздаётся целиком

@@ -246,6 +246,20 @@ def sk_model_scores(model, X, output_kind):
     return np.asarray(model.predict(X))
 
 
+def sk_packed_scores(model, df, name):
+    """Скоры упакованной модели (scoring_kit.pack_model): обработка и приведение типов — внутри неё."""
+    import numpy as np
+
+    if not getattr(model, "scoring_kit_packed", False):
+        raise ValueError(
+            f"[scoring-kit] модель {name}: в конфиге packed: true, но в реестре лежит обычная модель "
+            f"({type(model).__name__}). Упакуйте её scoring_kit.pack_model или уберите packed"
+        )
+    out = model.predict(df)
+    values = out.iloc[:, 0] if hasattr(out, "iloc") else out
+    return np.asarray(values, dtype="float64")
+
+
 # ---------------------------------------------------------------- multi_model: слияние job'ов
 
 
