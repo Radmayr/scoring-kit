@@ -139,6 +139,21 @@ def test_publish_check_confirm_publish(repo):
     assert calls[0][:6] == ["mlc", "airflow", "publish", "inst-test", "-p", "proj"]
 
 
+def test_publish_passes_endpoint(repo):
+    (repo / "environments.yaml").write_text(
+        "test: {instance: inst-test, project: proj, endpoint: https://mlcore.t-tech.team}\n"
+        "prod: {instance: inst-prod, project: proj, endpoint: https://mlcore.t-tech.team}\n",
+        encoding="utf-8",
+    )
+    assert assemble(repo, "test").endpoint == "https://mlcore.t-tech.team"
+    calls = []
+    publish(repo, "test", yes=True, run=lambda a: calls.append(a) or 0, ask=lambda _: pytest.fail("спросили"))
+    cmd = calls[0]
+    assert cmd[:4] == ["mlc", "airflow", "publish", "inst-test"]
+    assert "--endpoint" in cmd
+    assert cmd[cmd.index("--endpoint") + 1] == "https://mlcore.t-tech.team"
+
+
 def test_publish_cancelled(repo):
     calls = []
     publish(repo, "test", run=lambda a: calls.append(a) or 0, ask=lambda _: "нет")
