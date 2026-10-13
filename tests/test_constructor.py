@@ -84,7 +84,7 @@ const [html, work] = process.argv.slice(2);
 const src = fs.readFileSync(html, "utf8");
 const grab = id => { const a = src.indexOf('<script id="' + id + '">'); return src.slice(src.indexOf(">", a) + 1, src.indexOf("</script>", a)); };
 const ctx = {}; vm.createContext(ctx);
-vm.runInContext(grab("team-presets") + "\n" + grab("logic") + "\nthis.API={defaultState,buildYaml,validate,fromConfig,parseColumns};", ctx);
+vm.runInContext(grab("team-presets") + "\n" + grab("logic") + "\nthis.API={defaultState,buildYaml,validate,fromConfig,parseColumns,mergeState,migrateState,isPacked};", ctx);
 const A = ctx.API, report = {};
 function emit(name, st) {
   const dir = path.join(work, "out", name); fs.mkdirSync(dir, {recursive: true});
@@ -152,7 +152,11 @@ s.sink.columns = A.parseColumns(pasted.lines).columns.concat([{name: "amount", t
 emit("t_types", s);
 s.sink.columns.push({name: "broken", type: "varchar(5"});
 report.bad_type = A.validate(s).map(p => p.text);
-fs.writeFileSync(path.join(work, "parsed.json"), JSON.stringify({parsed, bad_type: report.bad_type}));
+// old browser draft: models of the multi scenario have no "packed" flag yet
+const oldDraft = {recipe: "multi", multi: {models: [{name: "", mrid: "", score: "", features: "", cats: []},
+                                                    {name: "a", mrid: "", score: "", features: "f1, f2", cats: []}]}};
+const migrated = A.migrateState(A.mergeState(A.defaultState(), oldDraft)).multi.models.map(A.isPacked);
+fs.writeFileSync(path.join(work, "parsed.json"), JSON.stringify({parsed, bad_type: report.bad_type, migrated}));
 delete report.bad_type;
 console.log(JSON.stringify(report));
 """
@@ -203,6 +207,7 @@ def test_form_logic_builds_valid_and_lossless_configs(tmp_path):
     assert parsed["names"]["columns"] == [["client_id", "bigint", True], ["report_dt", "date", True], ["product_cd", "varchar", True]]
     assert parsed["junk"] == {"columns": [], "skipped": 1}
     assert any("varchar(5" in text for text in extra["bad_type"])
+    assert extra["migrated"] == [True, False]      # empty model -> packed, model with features stays plain
     assert load_pipeline(tmp_path / "out" / "t_calib").calibrate.segments == {"seg": [1, [2, 3]]}
     assert load_pipeline(tmp_path / "out" / "t_calib").calibrate.train_offsets == [-3, -2]
     window = load_pipeline(tmp_path / "out" / "t_calib_window").calibrate

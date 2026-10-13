@@ -514,6 +514,11 @@ function migrateState(st) {
     delete c.segs; delete c.duration; delete c.gap; delete c.rawOffsets;
   }
   if (!c.presets || !c.presets.length) c.presets = [newPreset()];
+  // draft saved before packed models existed: no flag on the models of the multi scenario
+  st.multi.models.forEach(function (m) {
+    if (m.packed === undefined) m.packed = !words(m.features).length;
+    if (!m.keep) m.keep = {};
+  });
   return st;
 }
 function scenarioTitle(r) {
