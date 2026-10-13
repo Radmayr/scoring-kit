@@ -1,0 +1,405 @@
+<title>Упакованная модель</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Схема для инженера: путь модели сверху вниз по четырём местам, внутри — блоки слева направо.
+   Цвет кодирует роль блока: наш слой, платформа, данные, ожидание, проверка. */
+:root {
+  --bg: #F3F5F2;
+  --surface: #FFFFFF;
+  --ink: #18212B;
+  --muted: #5A6572;
+  --line: #D6DBD3;
+  --ours: #2453B8;
+  --platform: #1C7F55;
+  --data: #A86A12;
+  --wait: #6F52A0;
+  --check: #B4421A;
+  --code-bg: #EEF1EC;
+  --font-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --font-body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10151B; --surface: #18202A; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+    --ours: #82A6FF; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60;
+    --code-bg: #121921; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10151B; --surface: #18202A; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+  --ours: #82A6FF; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60;
+  --code-bg: #121921; color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--font-body); }
+.page { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 56px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font: 700 clamp(26px, 4.4vw, 40px)/1.15 var(--font-display); letter-spacing: -0.01em; }
+h2 { font: 600 22px/1.3 var(--font-body); }
+h3 { font: 600 16px/1.35 var(--font-body); }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+.lead { color: var(--muted); font-size: 17px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 20px; min-width: 0; }
+header { display: grid; gap: 14px; }
+.note { color: var(--muted); font-size: 13.5px; max-width: 80ch; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* Путь модели: полосы */
+.lanes { display: grid; gap: 0; }
+.lane { display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: stretch; }
+.lane-label { padding-top: 14px; display: grid; gap: 4px; align-content: start; }
+.lane-label b { font-weight: 600; }
+.lane-label small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.lane-body { display: flex; flex-wrap: wrap; gap: 10px; padding-block: 10px; border-left: 2px dashed var(--line); padding-left: 16px; min-width: 0; }
+.down { grid-column: 2; color: var(--muted); font-size: 18px; line-height: 1; padding: 0 0 0 9px; }
+
+.node { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 4px; align-content: start; min-width: 0; flex: 1 1 180px; max-width: 340px; }
+.node .kind { font: 600 11px/1 var(--font-body); letter-spacing: 0.07em; text-transform: uppercase; }
+.node .name { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.node .what { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.node .op { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.k-ours .kind { color: var(--ours); }   .k-ours { border-color: color-mix(in srgb, var(--ours) 45%, var(--line)); }
+.k-plat .kind { color: var(--platform); } .k-plat { border-color: color-mix(in srgb, var(--platform) 45%, var(--line)); }
+.k-data .kind { color: var(--data); }   .k-data { border-color: color-mix(in srgb, var(--data) 45%, var(--line)); }
+.k-wait .kind { color: var(--wait); }   .k-wait { border-color: color-mix(in srgb, var(--wait) 45%, var(--line)); }
+.k-check .kind { color: var(--check); } .k-check { border-color: color-mix(in srgb, var(--check) 45%, var(--line)); }
+
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.flow .node { flex: 1 1 140px; max-width: none; padding: 8px 10px; }
+.flow .node .name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
+.arrow { align-self: center; color: var(--muted); font-size: 18px; flex: 0 0 auto; }
+
+.recipes { display: grid; gap: 4px; }
+.recipe { display: grid; gap: 10px; padding-block: 16px; border-top: 1px solid var(--line); }
+.recipe-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.recipe-head small { color: var(--muted); }
+
+/* Шаги внутри predict: это настоящая последовательность, поэтому нумерация */
+.inside { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: grid; gap: 4px; }
+.step { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding-block: 10px; border-top: 1px solid var(--line); }
+.step:first-of-type { border-top: none; }
+.step-num { font: 700 18px/1.3 var(--font-display); color: var(--ours); }
+.step-body { display: grid; gap: 3px; min-width: 0; }
+.step-body b { font-weight: 600; }
+.step-body span { color: var(--muted); font-size: 13.5px; }
+.step-body .stop { color: var(--check); font-size: 13px; }
+
+.cmd { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.cmd pre { margin: 0; padding: 12px 14px; overflow-x: auto; font: 12.5px/1.6 var(--font-mono); color: var(--ink); }
+.cmd pre .c { color: var(--muted); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.two > div { display: grid; gap: 8px; align-content: start; min-width: 0; }
+
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th { font-weight: 600; color: var(--muted); font-size: 12.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.table-wrap table { min-width: 620px; }
+.pill { display: inline-block; white-space: nowrap; font: 600 12px/1 var(--font-body); padding: 5px 9px; border-radius: 999px; }
+.p-yes { color: var(--platform); background: color-mix(in srgb, var(--platform) 14%, var(--surface)); }
+.p-part { color: var(--data); background: color-mix(in srgb, var(--data) 16%, var(--surface)); }
+.p-no { color: var(--check); background: color-mix(in srgb, var(--check) 14%, var(--surface)); }
+
+.warns { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.warn { border: 1px solid color-mix(in srgb, var(--check) 50%, var(--line)); background: color-mix(in srgb, var(--check) 7%, var(--surface)); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.warn h3 { color: var(--check); font-size: 15px; }
+.warn p { font-size: 14px; }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 80ch; }
+.steps li::marker { color: var(--muted); }
+
+@media (max-width: 720px) {
+  .lane { grid-template-columns: 1fr; gap: 0; }
+  .lane-label { padding-top: 12px; }
+  .down { grid-column: 1; }
+  .node { max-width: none; }
+}
+</style>
+
+<div class="page">
+
+<header>
+  <span class="eyebrow">scoring-kit 0.6.0 · что изменилось и как это работает</span>
+  <h1>Упакованная модель</h1>
+  <p class="lead">Автор модели один раз упаковывает её вместе со своей обработкой и кладёт в Model Registry. Процесс скоринга после этого знает только ссылку на модель. Один и тот же файл работает в Greenplum и в DLH.</p>
+  <div class="legend" aria-label="Обозначения">
+    <span><i style="background:var(--ours)"></i>наш слой (scoring-kit)</span>
+    <span><i style="background:var(--platform)"></i>оператор платформы</span>
+    <span><i style="background:var(--data)"></i>данные и файлы</span>
+    <span><i style="background:var(--wait)"></i>ожидание</span>
+    <span><i style="background:var(--check)"></i>проверка, которая может остановить</span>
+  </div>
+</header>
+
+<section>
+  <h2>Что изменилось</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th></th><th>Было (0.5)</th><th>Стало (0.6)</th></tr></thead>
+    <tbody>
+      <tr><td><b>Где обработка</b></td><td>Только приведение типов, заданное в конфиге процесса. Своя обработка — файл predictor.py, только одна модель и только Greenplum</td><td>Внутри модели: функция автора хранится в файле модели вместе с ней</td></tr>
+      <tr><td><b>Что в конфиге процесса</b></td><td>Ссылка, список фичей по порядку, категориальные, тип чисел, вид результата</td><td>Ссылка и одна строка <code>packed: true</code></td></tr>
+      <tr><td><b>Greenplum и DLH</b></td><td>Разные пути: в DLH отдельный бандл без обработки</td><td>Один файл для обоих движков</td></tr>
+      <tr><td><b>Несколько моделей</b></td><td>У всех одна и та же встроенная обработка</td><td>У каждой модели своя обработка внутри её упаковки</td></tr>
+      <tr><td><b>Старые процессы</b></td><td colspan="2">Не затронуты: обычная модель с фичами в конфиге и predictor.py работают как раньше</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Путь модели: от ноутбука до скора</h2>
+  <div class="lanes">
+    <div class="lane">
+      <div class="lane-label"><b>1. Ноутбук автора</b><small>DLH Jupyter или личный. Делает тот, кто обучал модель</small></div>
+      <div class="lane-body">
+        <div class="node k-data"><span class="kind">данные</span><span class="name">Сырая выборка</span><span class="what">Те же колонки, что вернёт SQL процесса. Несколько сотен строк идут в упаковку как <code>sample</code></span></div>
+        <div class="node k-ours"><span class="kind">код автора</span><span class="name">def prepare(df)</span><span class="what">Сырые колонки превращает в фичи модели. Пишется обычной функцией; доступны np и pd</span></div>
+        <div class="node k-ours"><span class="kind">наш слой</span><span class="name">pack_model(...)</span><span class="what">Одна функция для всех. Собирает модель, обработку и типы фичей в один объект</span><span class="op">scoring_kit.pack_model</span></div>
+        <div class="node k-check"><span class="kind">проверка</span><span class="name">Самопроверка упаковки</span><span class="what">Скоры «по шагам в ноутбуке» против скоров упакованного файла. Не совпало — файл не создаётся</span></div>
+      </div>
+    </div>
+    <div class="down">↓</div>
+    <div class="lane">
+      <div class="lane-label"><b>2. Model Registry</b><small>Автор загружает файл новой версией модели</small></div>
+      <div class="lane-body">
+        <div class="node k-data"><span class="kind">файл</span><span class="name">model_packed.pkl</span><span class="what">Внутри: модель в переносимом виде, текст функции prepare, список входных колонок, фичи по порядку, категориальные, тип чисел</span></div>
+        <div class="node k-ours"><span class="kind">наш слой</span><span class="name">scoring describe</span><span class="what">Показывает содержимое файла, включая код обработки. Нужен для ревью: что именно уехало в реестр</span></div>
+      </div>
+    </div>
+    <div class="down">↓</div>
+    <div class="lane">
+      <div class="lane-label"><b>3. Процесс</b><small>Конструктор, затем GitLab и CI</small></div>
+      <div class="lane-body">
+        <div class="node k-ours"><span class="kind">наш слой</span><span class="name">Конструктор</span><span class="what">Ссылка на модель и галочка «упакована». Полей с фичами нет</span></div>
+        <div class="node k-data"><span class="kind">файл</span><span class="name">pipeline.yaml</span><span class="what">В блоке модели: <code>mrid</code>, образ и <code>packed: true</code></span></div>
+        <div class="node k-check"><span class="kind">проверка</span><span class="name">CI: scoring validate</span><span class="what">С <code>packed: true</code> нельзя указать фичи; без него фичи обязательны</span></div>
+        <div class="node k-ours"><span class="kind">наш слой</span><span class="name">Генерация DAG</span><span class="what">Тот же набор шагов, что и раньше. Меняется только код шага inference</span></div>
+      </div>
+    </div>
+    <div class="down">↓</div>
+    <div class="lane">
+      <div class="lane-label"><b>4. Запуск в Airflow</b><small>Модель подтягивается из реестра по ссылке</small></div>
+      <div class="lane-body">
+        <div class="node k-plat"><span class="kind">Greenplum</span><span class="name">Под с моделью</span><span class="what">Наш код в поде загружает файл и вызывает <code>predict</code> на каждом батче выборки</span><span class="op">BatchInferenceOperator</span></div>
+        <div class="node k-plat"><span class="kind">DLH</span><span class="name">Spark</span><span class="what">Оператор сам загружает файл, берёт из него список колонок и вызывает <code>predict</code></span><span class="op">DlhBatchInferenceOperator</span></div>
+        <div class="node k-data"><span class="kind">данные</span><span class="name">Витрина скоров</span><span class="what">Ключ, скор и колонки, которые процесс переносит из выборки</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Что делает автор и что остаётся в процессе</h2>
+  <div class="two">
+    <div>
+      <h3>В ноутбуке</h3>
+      <div class="cmd"><pre>from scoring_kit import pack_model
+
+def prepare(df):
+    df["debt_log"] = np.log1p(df["debt_amt"])
+    df["dpd_days"] = df["dpd_days"].fillna(-1)
+    return df
+
+pack_model(
+    model,
+    features=["debt_log", "dpd_days", "product_cd"],
+    cat_features=["product_cd"],
+    prepare=prepare,
+    sample=raw_df.head(1000),
+    path="model_packed.pkl",
+)</pre></div>
+      <p class="note"><code>features</code> — фичи модели после обработки, в порядке обучения. Сырые колонки (<code>debt_amt</code>) упаковка находит сама по <code>sample</code>.</p>
+    </div>
+    <div>
+      <h3>В конфиге процесса</h3>
+      <div class="cmd"><pre>model:
+  mrid: team/cure_30_packed/1.0.0
+  image: &lt;образ&gt;
+  requirements: [lightgbm==3.3.5, ...]
+  packed: true
+
+<span class="c"># несколько моделей: то же у каждой</span>
+models:
+  - name: pd_30
+    mrid: team/pd_30_packed/1.0.0
+    score_column: score_30
+    packed: true
+  - name: pd_90
+    mrid: team/pd_90_packed/1.0.0
+    score_column: score_90
+    packed: true</pre></div>
+      <p class="note">Образ и пакеты по-прежнему нужны: в поде должна быть библиотека модели.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Что происходит внутри predict</h2>
+  <p class="note">Эта последовательность зашита в упакованный файл и одинакова в Greenplum и в DLH. Именно она гарантирует, что обработка на скоринге та же, что в ноутбуке.</p>
+  <div class="inside">
+    <div class="step"><span class="step-num">1</span><div class="step-body"><b>Берёт только свои входные колонки</b><span>Список сырых колонок записан при упаковке. Остальные колонки выборки модель не видит.</span><span class="stop">Останов: в выборке нет нужной колонки — сообщение называет, какой.</span></div></div>
+    <div class="step"><span class="step-num">2</span><div class="step-body"><b>Переводит числа из формата хранилища</b><span>Колонки типа numeric приходят из Greenplum и Spark особым типом Decimal. Он превращается в обычные числа, чтобы формулы автора работали.</span></div></div>
+    <div class="step"><span class="step-num">3</span><div class="step-body"><b>Выполняет prepare автора</b><span>Текст функции исполняется в чистом окружении, где есть только np и pd. Поэтому она не зависит от ноутбука, в котором написана.</span></div></div>
+    <div class="step"><span class="step-num">4</span><div class="step-body"><b>Проверяет результат обработки</b><span>Должен вернуться датафрейм с теми же строками в том же порядке и со всеми фичами модели.</span><span class="stop">Останов: обработка удалила или переставила строки, либо не создала фичу.</span></div></div>
+    <div class="step"><span class="step-num">5</span><div class="step-body"><b>Приводит типы фичей</b><span>Числа — к float32 или float64, категориальные — к виду, который ждёт модель. Это та же «базовая обработка», что и раньше. Её можно выключить: <code>cast=False</code> при упаковке.</span><span class="stop">Останов: в числовой фиче оказался текст.</span></div></div>
+    <div class="step"><span class="step-num">6</span><div class="step-body"><b>Считает скор</b><span>Фичи подаются модели в порядке обучения. Для классификации берётся вероятность класса 1.</span></div></div>
+    <div class="step"><span class="step-num">7</span><div class="step-body"><b>Возвращает одну колонку со скором</b><span>В Greenplum наш код в поде дописывает её к батчу и проверяет: нет пропусков, число строк то же, скор в диапазоне от 0 до 1.</span><span class="stop">Останов в Greenplum: пропуски в скоре или скор вне диапазона. Проверку диапазона можно снять для регрессии.</span></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Три сценария: какие шаги в Airflow</h2>
+  <div class="recipes">
+    <div class="recipe">
+      <div class="recipe-head"><h3>Одна модель, Greenplum</h3><small>шаги те же, что у обычной модели</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="name">wait_source</span><span class="what">ждём обновления таблиц</span></div><span class="arrow">→</span>
+        <div class="node k-check"><span class="name">read_source</span><span class="what">выборка; не пусто, ключ уникален, колонки ключа и витрины на месте</span></div><span class="arrow">→</span>
+        <div class="node k-plat"><span class="name">inference</span><span class="what">батчами по 100 тысяч строк: predict упакованной модели, проверка скора</span></div><span class="arrow">→</span>
+        <div class="node k-ours"><span class="name">write</span><span class="what">во временную таблицу, затем замена одной транзакцией</span></div><span class="arrow">→</span>
+        <div class="node k-data"><span class="name">harmonize · actualize</span><span class="what">гранты и отметка актуальности</span></div>
+      </div>
+    </div>
+    <div class="recipe">
+      <div class="recipe-head"><h3>Несколько моделей, Greenplum</h3><small>у каждой модели свой упакованный файл и своя обработка</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="name">wait_source</span><span class="what">ждём обновления</span></div><span class="arrow">→</span>
+        <div class="node k-check"><span class="name">read_source</span><span class="what">одна выборка на все модели</span></div><span class="arrow">→</span>
+        <div class="node k-plat"><span class="name">inference</span><span class="what">модели с одинаковым образом считаются в одном поде, по очереди на каждом батче</span></div><span class="arrow">→</span>
+        <div class="node k-ours"><span class="name">merge</span><span class="what">только если образы разные: скоры из разных подов склеиваются по ключу</span></div><span class="arrow">→</span>
+        <div class="node k-ours"><span class="name">write</span><span class="what">все скоры в одну витрину</span></div>
+      </div>
+      <p class="note">Упакованные и обычные модели можно смешивать в одном процессе: это удобно при постепенном переходе.</p>
+    </div>
+    <div class="recipe">
+      <div class="recipe-head"><h3>Одна модель, DLH</h3><small>тот же файл, что и для Greenplum</small></div>
+      <div class="flow">
+        <div class="node k-wait"><span class="name">wait_source</span><span class="what">ждём обновления</span></div><span class="arrow">→</span>
+        <div class="node k-ours"><span class="name">prepare_source</span><span class="what">только если источник задан запросом: результат сохраняется в таблицу</span></div><span class="arrow">→</span>
+        <div class="node k-check"><span class="name">check_source</span><span class="what">не пусто, ключ уникален, колонки ключа на месте</span></div><span class="arrow">→</span>
+        <div class="node k-plat"><span class="name">inference (Spark)</span><span class="what">оператор читает таблицу, отбирает входные колонки по списку из модели и вызывает predict</span></div><span class="arrow">→</span>
+        <div class="node k-check"><span class="name">check_result</span><span class="what">строк столько же, скор заполнен</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Где стоит защита</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Когда</th><th>Что проверяется</th><th>Что будет при ошибке</th></tr></thead>
+    <tbody>
+      <tr><td>Упаковка в ноутбуке</td><td>Функция обработки не использует ничего, определённого вне её</td><td>Отказ с перечнем этих имён</td></tr>
+      <tr><td>Упаковка в ноутбуке</td><td>Скоры упакованного файла совпадают с расчётом по шагам и с исходной моделью</td><td>Отказ, файл не создаётся</td></tr>
+      <tr><td>Упаковка в ноутбуке</td><td>Обработка сохраняет строки и создаёт все фичи модели</td><td>Отказ с объяснением</td></tr>
+      <tr><td>Merge request, CI</td><td>Конфиг согласован: <code>packed: true</code> без фичей либо фичи без <code>packed</code></td><td>Красная проверка в GitLab</td></tr>
+      <tr><td>Запуск, шаг inference</td><td>В конфиге «упакована», а в реестре обычная модель, или наоборот</td><td>Процесс останавливается до записи, сообщение говорит, что поправить</td></tr>
+      <tr><td>Запуск, шаг inference</td><td>Все входные колонки модели есть в выборке</td><td>Процесс останавливается до записи</td></tr>
+      <tr><td>Запуск, шаг inference</td><td>Скор без пропусков и в диапазоне</td><td>Процесс останавливается до записи</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Во всех случаях витрина не меняется: запись идёт отдельным шагом после инференса и заменяет данные одной транзакцией.</p>
+</section>
+
+<section>
+  <h2>Алерты при падении</h2>
+  <p class="note">Алерт — не отдельный шаг в графе, поэтому на схемах выше его нет. Это обработчик, который навешивается на каждый шаг процесса и срабатывает, когда шаг упал. Используется оператор платформы <code>TiMeNotifier</code> из <code>airflow_provider_time</code>.</p>
+  <div class="flow">
+    <div class="node k-ours"><span class="name">конструктор</span><span class="what">поле «Куда писать при падении»: канал или логины</span></div><span class="arrow">→</span>
+    <div class="node k-data"><span class="name">pipeline.yaml</span><span class="what">блок <code>alerts.recipients</code></span></div><span class="arrow">→</span>
+    <div class="node k-ours"><span class="name">генерация DAG</span><span class="what">обработчик падения на все шаги сразу</span></div><span class="arrow">→</span>
+    <div class="node k-check"><span class="name">любой шаг упал</span><span class="what">ожидание, чтение, инференс, запись</span></div><span class="arrow">→</span>
+    <div class="node k-plat"><span class="name">TiMeNotifier</span><span class="what">сообщение в канал: процесс, владелец, шаг, ссылка на лог</span></div>
+  </div>
+  <div class="two">
+    <div>
+      <h3>В конфиге процесса</h3>
+      <div class="cmd"><pre>alerts:
+  recipients: ["#scoring-alerts", i.ivanov]
+  on_retry: false     <span class="c"># писать ли при повторной попытке</span>
+  message: ""         <span class="c"># приписка к тексту</span></pre></div>
+    </div>
+    <div>
+      <h3>Состояние сейчас</h3>
+      <p class="note">Механизм сделан и покрыт тестом на сгенерированный код. В ваших процессах блока <code>alerts</code> нет: вы решили настроить канал позже. Без этого блока обработчик в DAG не добавляется. На инстансе отправку сообщения я не проверял.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Сверка с вашим замыслом</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Что вы хотели</th><th>Статус</th><th>Как сделано</th></tr></thead>
+    <tbody>
+      <tr><td>В DLH модель упакована с обработкой: в predict и обработка, и вероятность</td><td><span class="pill p-yes">сделано</span></td><td>Именно так устроен упакованный файл. Оператор DLH вызывает predict и получает скор</td></tr>
+      <tr><td>В Greenplum то же самое, интерфейс упрощается</td><td><span class="pill p-yes">сделано</span></td><td>Тот же файл. В форме остались ссылка и галочка</td></tr>
+      <tr><td>Обработка точно та, что заложил автор, без ручного переноса</td><td><span class="pill p-yes">сделано</span></td><td>Код обработки хранится в файле модели и сверяется скорами при упаковке</td></tr>
+      <tr><td>Несколько моделей: у каждой свои фичи и своя функция</td><td><span class="pill p-yes">сделано</span></td><td>Каждая модель упакована отдельно, в процессе у каждой <code>packed: true</code></td></tr>
+      <tr><td>Одна функция упаковки, которой пользуются все</td><td><span class="pill p-part">сделано, не проверено у вас</span></td><td><code>pack_model</code>. Для сред без установки пакета есть упаковщик одним файлом. В вашем Jupyter DLH я его не запускал</td></tr>
+      <tr><td>Форма с кодом обработки для исключительных случаев</td><td><span class="pill p-no">не сделано</span></td><td>Поля с кодом в конструкторе нет. Исключительный случай сейчас — файл predictor.py в папке процесса, только одна модель и только Greenplum</td></tr>
+      <tr><td>Калибровка сразу после получения скоров</td><td><span class="pill p-no">отложено</span></td><td>По договорённости. Калибровка остаётся отдельным процессом</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Что проверено и на чём</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Проверка</th><th>Результат</th></tr></thead>
+    <tbody>
+      <tr><td>Одна модель с обработкой, Greenplum: скоры процесса против расчёта в ноутбуке</td><td>совпали</td></tr>
+      <tr><td>Три модели в одном процессе, у каждой своя обработка</td><td>совпали по каждой</td></tr>
+      <tr><td>Та же упакованная модель в сценарии DLH</td><td>совпали</td></tr>
+      <tr><td>Загрузка файла там, где scoring-kit не установлен, и повторная сериализация</td><td>работает</td></tr>
+      <tr><td>Упаковано на lightgbm 3.3.5, загружено на lightgbm 4.7 / numpy 2 / pandas 3</td><td>расхождение порядка 1e-16</td></tr>
+      <tr><td>Числа в формате Decimal, как из Spark</td><td>те же скоры</td></tr>
+      <tr><td>Модель не из бустингов (логистическая регрессия sklearn)</td><td>совпали</td></tr>
+      <tr><td>Конфиги из конструктора: проходят проверку, по ним собирается DAG</td><td>работает</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Всё это — на моём компьютере, в имитаторе, который исполняет сгенерированный DAG по правилам операторов платформы. Всего 165 автотестов. На ваших инстансах упакованная модель ещё не запускалась.</p>
+</section>
+
+<section>
+  <h2>Чего я не проверял и что нужно знать</h2>
+  <div class="warns">
+    <div class="warn"><h3>Нет прогона на ваших инстансах</h3><p>Ни в поде Greenplum, ни в Spark. Путь через оператор DLH вообще ни разу не запускался на инстансе, даже в прежнем виде. Первый теневой прогон покажет, всё ли сходится.</p></div>
+    <div class="warn"><h3>Обработка работает по частям</h3><p>В Greenplum predict получает батч в 100 тысяч строк, в Spark данные тоже делятся. Внутри prepare нельзя считать статистику по выборке, например медиану для заполнения пропусков. Такие значения вписываются в функцию числами.</p></div>
+    <div class="warn"><h3>Колонки модели проверяются позже</h3><p>У обычной модели нехватку фичи ловит шаг чтения. У упакованной процесс не знает её колонок заранее, и ошибка возникает на шаге inference. Запись при этом всё равно не происходит.</p></div>
+    <div class="warn"><h3>Имя колонки скора в DLH</h3><p>В DLH колонка называется так, как задано при упаковке, по умолчанию <code>score</code>. Если в процессе нужно другое имя, его надо передать в <code>pack_model(score_column=...)</code>. В Greenplum имя берётся из процесса.</p></div>
+    <div class="warn"><h3>Модели не из бустингов</h3><p>LightGBM и CatBoost хранятся в переносимом виде. Остальные модели сохраняются как есть, и версии библиотек в поде должны совпадать с обучением.</p></div>
+    <div class="warn"><h3>Правка обработки — это новая версия модели</h3><p>Так задумано: изменили prepare, упаковали заново, загрузили новую версию, поменяли ссылку в процессе. Зато в реестре всегда лежит пара «модель и её обработка».</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Что изменилось в репозиториях</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Где</th><th>Что</th></tr></thead>
+    <tbody>
+      <tr><td><b>scoring-kit 0.6.0</b><br><span class="note">на GitHub, в GitLab ещё не перенесён</span></td><td>Функция <code>pack_model</code> и упакованный объект. Поле <code>packed</code> в конфиге модели. Код шага inference умеет вызывать упакованную модель. Команды <code>scoring describe</code> и <code>scoring packer</code>. Галочка и инструкция в конструкторе. Пример в папке examples/demo_packed</td></tr>
+      <tr><td><b>scoring-pipelines</b></td><td>Я ничего не менял. Процессы bankrupt_phis, pd_model и calib_pre описаны по-старому и продолжают работать на новой версии без правок</td></tr>
+      <tr><td><b>Ваши рабочие доработки</b></td><td>В версии 0.6.0 их нет: я их ещё не видел. Их нужно слить, прежде чем переносить 0.6.0 в GitLab</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Как перевести существующий процесс</h2>
+  <ol class="steps">
+    <li>Автор упаковывает модель через <code>pack_model</code>. Если своей обработки нет, <code>prepare</code> не указывается: останется приведение типов.</li>
+    <li>Файл загружается в Model Registry новой версией.</li>
+    <li>В конфиге процесса меняется ссылка, вместо фичей ставится <code>packed: true</code>. Для bankrupt_phis заодно уходит predictor.py.</li>
+    <li>Процесс запускается в тени, скоры сверяются с боевыми тем же запросом сверки, что и раньше.</li>
+    <li>После совпадения процесс выходит из тени.</li>
+  </ol>
+</section>
+
+</div>

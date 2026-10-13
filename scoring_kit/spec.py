@@ -297,6 +297,13 @@ class Job(_Strict):
     flavor: str = "4cpu-16ram"
 
 
+class CohortFrom(_Strict):
+    """Когорта считается из даты: начало периода, как date_trunc в SQL."""
+
+    column: str
+    truncate: Literal["day", "week", "month", "quarter", "year"] = "month"
+
+
 class Calibrate(_Strict):
     method: Literal["isotonic", "sigmoid"] = "isotonic"
     score: str
@@ -304,7 +311,11 @@ class Calibrate(_Strict):
     output: str
     # {поле: [значение | [значения группы], ...]}; несколько полей — декартово произведение.
     segments: dict[str, list[Union[str, int, list[Union[str, int]]]]] = Field(min_length=1)
-    cohort_column: str
+    cohort_column: str = "cohort"
+    # Если задано — колонка когорты считается из даты в dev и apply (в запросах она не нужна).
+    cohort_from: Optional[CohortFrom] = None
+    # Чем заменить пустой факт в dev (у незрелых когорт факта ещё нет); null — пустой факт в обучении это ошибка.
+    target_fill: Optional[float] = None
     # Для когорты на позиции i (в отсортированном списке когорт сегмента в dev) обучение идёт
     # на когортах с позициями i+offset. [-3, -2] = как в текущем процессе.
     train_offsets: list[int] = [-3, -2]
@@ -320,6 +331,8 @@ class Calibrate(_Strict):
     @model_validator(mode="after")
     def _check(self):
         _check_idents([self.score, self.target, self.output, self.cohort_column, *self.segments], "calibrate")
+        if self.cohort_from is not None:
+            _check_idents([self.cohort_from.column], "calibrate.cohort_from.column")
         if not self.train_offsets or any(o >= 0 for o in self.train_offsets):
             raise ValueError("calibrate.train_offsets: нужны отрицательные сдвиги, например [-3, -2]")
         return self

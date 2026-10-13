@@ -96,8 +96,19 @@ textarea.short { min-height: 64px; }
 
 /* Колонки приёмника */
 .cols { display: grid; gap: 6px; }
-.colrow { display: grid; grid-template-columns: minmax(0, 1fr) 130px 84px; gap: 6px; align-items: center; }
-@media (max-width: 520px) { .colrow { grid-template-columns: minmax(0, 1fr) 110px; } .colrow > :last-child { grid-column: 1 / -1; } }
+.colrow { display: grid; grid-template-columns: minmax(0, 1fr) 130px 96px 84px; gap: 6px; align-items: center; }
+.colrow.is-other { grid-template-columns: minmax(0, 1fr) 104px 170px 84px; }
+.colrow .t-size, .colrow .t-custom { font-family: var(--font-mono); font-size: 13px; }
+.colrow .no-size { color: var(--muted); font-size: 12px; padding-left: 4px; }
+.colhead { display: grid; grid-template-columns: minmax(0, 1fr) 130px 96px 84px; gap: 6px; font-size: 12px; color: var(--muted); }
+@media (max-width: 560px) {
+  .colrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .colrow > :first-child { grid-column: 1 / -1; }
+  .colrow > :last-child { grid-column: 1 / -1; justify-self: start; }
+  .colhead { display: none; }
+  .colrow.is-other { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.paste-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .colrow .fixed { font: 12px var(--font-body); color: var(--muted); }
 
 /* Правая панель */
@@ -133,6 +144,7 @@ details.help { border: 1px solid var(--line); border-radius: 10px; padding: 10px
 details.help summary { cursor: pointer; font-weight: 500; font-size: 14px; color: var(--ours); }
 details.help p { font-size: 13.5px; margin-block: 8px; }
 details.help pre.yaml { background: var(--surface); max-height: none; }
+.step h3 { font: 600 14.5px/1.3 var(--font-body); margin-top: 6px; }
 .example-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); color: var(--ink); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -212,7 +224,66 @@ var SIZES = {
   medium: {label: "1–10 млн строк", flavor: "16cpu-128ram"},
   large: {label: "больше 10 млн строк", flavor: "16cpu-256ram"}
 };
-var COLUMN_TYPES = ["bigint", "int", "numeric", "varchar", "date", "timestamp"];
+var COLUMN_TYPES = ["bigint", "int", "smallint", "numeric", "varchar", "date", "timestamp", "boolean"];
+// У этих типов бывает размер в скобках: подсказка, что в него вписывать.
+var SIZED_TYPES = {varchar: "длина: 5", numeric: "18,4"};
+
+// Тип колонки по частям для формы: {base, size} для типов из списка или {custom} для остальных.
+function typeParts(type) {
+  var m = String(type || "").match(/^([a-z][a-z0-9 ]*?)\s*(?:\(([^)]*)\))?$/);
+  if (m && COLUMN_TYPES.indexOf(m[1]) >= 0 && (m[2] === undefined || SIZED_TYPES[m[1]])) return {base: m[1], size: m[2] || ""};
+  return {custom: String(type || "")};
+}
+function joinType(base, size) {
+  var clean = String(size || "").replace(/[\s()]/g, "");
+  return base + (clean && SIZED_TYPES[base] ? "(" + clean + ")" : "");
+}
+// Тип Greenplum, как в create table: имя и необязательный размер в скобках.
+var TYPE = /^[a-z][a-z0-9 ]*(\(\d+(,\d+)?\))?$/;
+
+function cleanType(text) {
+  var t = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  var m = t.match(/^(character varying|double precision|timestamp(?: with(?:out)? time zone)?|time(?: with(?:out)? time zone)?|[a-z][a-z0-9]*)\s*(\(\s*\d+\s*(?:,\s*\d+\s*)?\))?/);
+  if (!m) return "";
+  var base = m[1] === "character varying" ? "varchar" : m[1];
+  return base + (m[2] ? m[2].replace(/\s+/g, "") : "");
+}
+
+// Колонки, вставленные списком: строки «имя тип» из create table, вывод information_schema
+// (имя и тип через табуляцию), «имя: тип» из yaml или просто имена через запятую.
+function parseColumns(text) {
+  var body = String(text || "").replace(/--.*$/gm, "");
+  var open = body.search(/create\s+table/i) >= 0 ? body.indexOf("(") : -1;
+  if (open >= 0) {
+    var depth = 0, end = body.length;
+    for (var i = open; i < body.length; i++) {
+      if (body[i] === "(") depth++;
+      if (body[i] === ")" && --depth === 0) { end = i; break; }
+    }
+    body = body.slice(open + 1, end);
+  }
+  var parts = [], level = 0, current = "";
+  for (var j = 0; j < body.length; j++) {
+    var ch = body[j];
+    if (ch === "(") level++;
+    if (ch === ")") level--;
+    if ((ch === "," && level === 0) || ch === "\n" || ch === ";") { parts.push(current); current = ""; } else current += ch;
+  }
+  parts.push(current);
+  var columns = [], skipped = [], seen = {};
+  parts.forEach(function (raw) {
+    var line = raw.replace(/^[\s|]+|[\s|,]+$/g, "");
+    if (!line || /^[-+|\s]+$/.test(line)) return;
+    var m = line.match(/^"?([A-Za-z_][A-Za-z0-9_]*)"?\s*(?:[:|\t ]\s*(.*))?$/);
+    if (m && /^column_name$/i.test(m[1])) return;                      // строка заголовка из information_schema
+    if (!m || /^(primary|constraint|unique|foreign|check|distributed|partition|select|from|where|create|table|insert|with)$/i.test(m[1])) { skipped.push(line); return; }
+    var name = m[1].toLowerCase(), type = cleanType(m[2]);
+    if (seen[name]) return;
+    seen[name] = 1;
+    columns.push({name: name, type: type || guessType(name), guessed: !type});
+  });
+  return {columns: columns, skipped: skipped};
+}
 var REPORT_COLUMNS = [
   ["segment", "varchar"], ["cohort", "varchar"], ["status", "varchar"], ["train_cohorts", "varchar"],
   ["train_rows", "int"], ["test_rows", "int"], ["apply_rows", "int"], ["brier_raw", "numeric"], ["brier_calibrated", "numeric"]
@@ -241,8 +312,9 @@ function defaultState() {
     multi: {image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", float32: true,
       models: [newModel(), newModel()]},
     calib: {devQuery: "", applyQuery: "", applyKey: "", score: "", target: "", output: "", method: "isotonic",
-      segField: "", segValues: "", segNumeric: false, moreSegments: {},
-      cohort: "cohort", from: -3, to: -2, uncal: "null", job: firstPreset("job"), customImage: "", customReq: ""},
+      segs: [newSegment()], duration: 2, gap: 1, rawOffsets: null,
+      cohortMode: "column", cohort: "cohort", cohortDate: "due_dt", cohortTrunc: "month", targetFill: false,
+      uncal: "null", job: firstPreset("job"), customImage: "", customReq: ""},
     spark: firstPreset("spark"), customSpark: "",
     sink: {table: "", mode: "replace", columns: [], types: {}},
     report: {enabled: true, table: "", columns: null, imported: false},
@@ -384,16 +456,52 @@ function rest(obj, handled) {
   return Object.keys(out).length ? out : undefined;
 }
 
-function segmentTokens(st) {
-  return String(st.calib.segValues || "").split("\n").map(function (line) {
-    return words(line).map(function (t) { return st.calib.segNumeric && /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : t; });
+var NUMBER = /^-?\d+(\.\d+)?$/;
+var TRUNCATIONS = [["month", "месяца"], ["week", "недели"], ["quarter", "квартала"], ["day", "дня"], ["year", "года"]];
+function newSegment() { return {field: "", values: "", numeric: false}; }
+// Значения одного поля сегмента: строка — одно значение, несколько через запятую в строке — группа.
+function segTokens(seg) {
+  return String(seg.values || "").split("\n").map(function (line) {
+    return words(line).map(function (t) { return seg.numeric && NUMBER.test(t) ? Number(t) : t; });
   }).filter(function (g) { return g.length; }).map(function (g) { return g.length === 1 ? g[0] : g; });
 }
-function rangeOffsets(from, to) {
-  var a = parseInt(from, 10), b = parseInt(to, 10), r = [];
-  if (isNaN(a) || isNaN(b)) return [-3, -2];
-  for (var i = Math.min(a, b); i <= Math.max(a, b); i++) r.push(i);
+// Сколько сегментов получится: каждое значение одного поля с каждым значением другого.
+function segmentCount(c) {
+  return c.segs.reduce(function (n, seg) { return n * segTokens(seg).length; }, c.segs.length ? 1 : 0);
+}
+function windowParts(c) {
+  var d = parseInt(c.duration, 10), g = parseInt(c.gap, 10);
+  return {duration: isNaN(d) ? 0 : d, gap: isNaN(g) ? 0 : g};
+}
+// Окно обучения сдвигами: для когорты на позиции T обучение на T-(длина+пропуск) ... T-(пропуск+1).
+function calibOffsets(c) {
+  if (c.rawOffsets) return c.rawOffsets;
+  var w = windowParts(c), r = [];
+  for (var i = -(w.duration + w.gap); i <= -(w.gap + 1); i++) r.push(i);
   return r;
+}
+function windowText(c) {
+  var o = calibOffsets(c);
+  if (!o.length) return "";
+  var w = windowParts(c), far = "T−" + (-o[0]), near = "T−" + (-o[o.length - 1]);
+  if (c.rawOffsets) return "Для когорты T обучение идёт на когортах: " + o.map(function (x) { return "T−" + (-x); }).join(", ") + ".";
+  return "Для когорты T обучение идёт на когортах " + (o.length > 1 ? "с " + far + " по " + near : far) +
+    (w.gap ? "; ближайшие " + w.gap + " перед T пропускаются." : "; без пропуска.");
+}
+// Черновик из старой версии страницы: одно поле сегмента и окно «с … по …».
+function migrateState(st) {
+  var c = st.calib;
+  if (c.segField !== undefined) {
+    if (c.segField || c.segValues) c.segs = [{field: c.segField || "", values: c.segValues || "", numeric: !!c.segNumeric}];
+    delete c.segField; delete c.segValues; delete c.segNumeric; delete c.moreSegments;
+  }
+  if (c.from !== undefined) {
+    var a = parseInt(c.from, 10), b = parseInt(c.to, 10);
+    if (!isNaN(a) && !isNaN(b) && Math.max(a, b) < 0) { c.duration = Math.abs(a - b) + 1; c.gap = -Math.max(a, b) - 1; }
+    delete c.from; delete c.to;
+  }
+  if (!c.segs || !c.segs.length) c.segs = [newSegment()];
+  return st;
 }
 function scenarioTitle(r) {
   return {single: "одна модель", dlh: "одна модель на DLH", multi: "несколько моделей", calib: "калибровка"}[r];
@@ -441,11 +549,16 @@ function buildYaml(st) {
       ["  key: " + list(words(c.applyKey))], kept("apply", 2)).join("\n"));
     var job = imageOf(c.job, c.customImage, c.customReq);
     out.push(["job:", "  image: " + q(job.image), "  requirements: " + list(job.requirements)].concat(fl("job", 2), kept("job", 2)).join("\n"));
-    out.push(["calibrate:", "  method: " + c.method, "  score: " + q(c.score), "  target: " + q(c.target), "  output: " + q(c.output),
-      "  segments:", "    " + (c.segField || "segment") + ": " + list(segmentTokens(st))]
-      .concat(yLines(c.moreSegments, 4), [
-        "  cohort_column: " + q(c.cohort), "  train_offsets: " + list(rangeOffsets(c.from, c.to)),
-        "  uncalibrated: " + (c.uncal === "copy_score" ? "copy_score" : "null")], kept("calibrate", 2)).join("\n"));
+    var cal = ["calibrate:", "  method: " + c.method, "  score: " + q(c.score), "  target: " + q(c.target), "  output: " + q(c.output),
+      "  segments:"].concat(c.segs.map(function (seg, i) {
+        return "    " + (seg.field || "segment" + (i ? i + 1 : "")) + ": " + list(segTokens(seg));
+      }), ["  cohort_column: " + q(c.cohort || "cohort")]);
+    if (c.cohortMode === "date") cal.push("  cohort_from:", "    column: " + q(c.cohortDate), "    truncate: " + c.cohortTrunc);
+    if (c.targetFill) cal.push("  target_fill: 0");
+    var w = windowParts(c);
+    cal.push("  train_offsets: " + list(calibOffsets(c)) + (c.rawOffsets ? "" : "    # обучение на " + w.duration + " когортах, пропуск " + w.gap),
+      "  uncalibrated: " + (c.uncal === "copy_score" ? "copy_score" : "null"));
+    out.push(cal.concat(kept("calibrate", 2)).join("\n"));
   } else {
     var src = ["source:"];
     if (st.source.mode === "table" && st.recipe === "dlh") src.push("  table: " + q(st.source.table));
@@ -497,7 +610,7 @@ function buildYaml(st) {
   var sk = ["sinks:", "  - table: " + q(st.sink.table), "    mode: " + (st.recipe === "dlh" ? "replace" : st.sink.mode)];
   if (st.recipe !== "dlh") sk = sk.concat(fl("sink", 4));
   sk.push("    columns:");
-  sinkColumns(st).forEach(function (col) { sk.push("      " + col.name + ": " + col.type); });
+  sinkColumns(st).forEach(function (col) { sk.push("      " + col.name + ": " + q(col.type)); });
   out.push(sk.concat(kept("sink", 4)).join("\n"));
   if (st.recipe === "calib" && st.report.enabled) {
     var extra = st.report.imported ? keep.report : {mode: "append", add_scored_at: true, actualize: false};
@@ -528,12 +641,22 @@ function validate(st) {
     if (!String(c.applyQuery).trim()) add(3, "Нужен запрос apply-выборки (новые скоры).");
     if (!key.length) add(3, "Укажите ключ apply-выборки — по нему пишется результат.");
     [["score", "колонка скора", "pre_score"], ["target", "колонка факта", "pre_target"], ["output", "колонка результата", "pre_score_calib"],
-     ["cohort", "колонка когорты", "cohort"], ["segField", "поле сегмента", "product_cd"]]
+     c.cohortMode === "date" ? ["cohortDate", "колонка с датой для когорты", "due_dt"] : ["cohort", "колонка когорты", "cohort"]]
       .forEach(function (x) { if (!IDENT.test(c[x[0]] || "")) add(4, "Калибровка: " + x[1] + " — латиницей, например " + x[2] + "."); });
-    if (!segmentTokens(st).length) add(4, "Перечислите значения сегментов — по одному на строку.");
-    if (c.segNumeric && words(c.segValues).some(function (t) { return !/^-?\d+(\.\d+)?$/.test(t); }))
-      add(4, "Отмечено, что сегменты — числа, но среди значений есть текст.");
-    if (rangeOffsets(c.from, c.to).some(function (o) { return o >= 0; })) add(4, "Окно обучения должно быть в прошлом: сдвиги отрицательные, например с −3 по −2.");
+    var segFields = [];
+    c.segs.forEach(function (seg, i) {
+      var n = c.segs.length > 1 ? "Поле сегмента " + (i + 1) + ": " : "Сегменты: ";
+      if (!IDENT.test(seg.field || "")) add(4, n + "название колонки латиницей, например product_cd.");
+      if (!segTokens(seg).length) add(4, n + "перечислите значения — по одному на строку.");
+      if (seg.numeric && words(seg.values).some(function (t) { return !NUMBER.test(t); })) add(4, n + "отмечено, что значения — числа, но среди них есть текст.");
+      if (seg.field) segFields.push(seg.field);
+    });
+    if (uniq(segFields).length !== segFields.length) add(4, "Поля сегментов повторяются.");
+    if (!c.rawOffsets) {
+      var win = windowParts(c);
+      if (win.duration < 1) add(4, "Окно обучения: нужна хотя бы одна когорта.");
+      if (win.gap < 0) add(4, "Окно обучения: пропуск не может быть отрицательным.");
+    }
     if (imageOf(c.job, c.customImage, c.customReq).image === "") add(4, "Выберите окружение для калибровки.");
     if (st.report.enabled && !TABLE.test(st.report.table)) add(5, "Таблица отчёта: вид schema.table.");
   } else {
@@ -585,8 +708,12 @@ function validate(st) {
 
   if (!TABLE.test(st.sink.table)) add(5, "Таблица результата: вид schema.table.");
   var cols = sinkColumns(st), colNames = cols.map(function (x) { return x.name; });
+  cols.forEach(function (x) {
+    if (x.name && !TYPE.test(x.type)) add(5, "Колонка «" + x.name + "»: тип «" + x.type + "» не похож на тип Greenplum. Проверьте размер: для varchar — число, для numeric — два числа через запятую.");
+  });
   cols.forEach(function (x) { if (!IDENT.test(x.name)) add(5, x.name ? "Колонка «" + x.name + "»: только строчные латинские буквы, цифры и _." : "Есть колонка без имени — заполните или уберите."); });
-  if (uniq(colNames).length !== colNames.length) add(5, "Колонки результата повторяются.");
+  var repeated = uniq(colNames.filter(function (n, i) { return n && colNames.indexOf(n) !== i; }));
+  repeated.forEach(function (n) { add(5, "Колонка «" + n + "» указана в результате несколько раз — оставьте одну строку."); });
   if (st.recipe === "dlh" && colNames.indexOf("processed_dttm") >= 0) add(5, "processed_dttm добавляет оператор DLH — уберите её из колонок.");
   return p;
 }
@@ -597,7 +724,7 @@ function previewTasks(st) {
   if (wait.length) t.push(["wait", "wait_source", "ждём обновления: " + wait.join(", ")]);
   if (st.recipe === "calib") {
     t.push(["check", "read_dev · read_apply", "две выборки + проверки"]);
-    t.push(["plat", "fit_apply", "калибровка по сегментам и когортам"]);
+    t.push(["plat", "fit_apply", "калибровка: сегментов " + segmentCount(st.calib) + ", обучение на " + calibOffsets(st.calib).length + " когортах"]);
     t.push(["ours", "write → " + sink, "калиброванный скор " + (st.calib.output || "")]);
     if (st.report.enabled) t.push(["data", "write → " + (st.report.table || "отчёт"), "отчёт: объёмы и Brier по ячейкам"]);
     return t;
@@ -621,7 +748,6 @@ function previewTasks(st) {
 function keptSections(st) {
   var names = Object.keys(st.keep || {}).filter(function (k) { return st.keep[k]; }).map(function (k) { return SECTION_NAMES[k] || k; });
   if (st.multi.models.some(function (m) { return m.keep && Object.keys(m.keep).length; })) names.push("отдельные модели");
-  if (Object.keys(st.calib.moreSegments || {}).length) names.push("дополнительные поля сегментов");
   return names;
 }
 
@@ -691,24 +817,30 @@ function fromConfig(cfg) {
     keep.model_defaults = rest(d, ["image", "requirements", "flavor", "output_kind", "num_dtype", "cat_features"]);
   }
   if (cfg.recipe === "fit_apply") {
-    var cb = cfg.calibrate || {}, segs = cb.segments || {}, fields = Object.keys(segs), segField = fields[0] || "";
+    var cb = cfg.calibrate || {}, segs = cb.segments || {};
     var ji = pick(cfg.job && cfg.job.image, cfg.job && cfg.job.requirements, "job");
-    var offs = cb.train_offsets || [-3, -2], more = {};
-    fields.slice(1).forEach(function (f) { more[f] = segs[f]; });
-    var values = segs[segField] || [];
+    var offs = (cb.train_offsets || [-3, -2]).slice().sort(function (x, y) { return x - y; });
+    var contiguous = offs.every(function (o, i) { return i === 0 || o === offs[i - 1] + 1; }) && offs[offs.length - 1] < 0;
+    var cf = cb.cohort_from, fromDate = !!(cf && cf.column);
+    var segList = Object.keys(segs).map(function (f) {
+      var values = segs[f] || [];
+      return {field: f, values: values.map(function (v) { return Array.isArray(v) ? v.join(", ") : v; }).join("\n"),
+        numeric: values.length > 0 && JSON.stringify(values).indexOf('"') < 0};
+    });
     st.calib = {devQuery: (cfg.dev || {}).query || "", applyQuery: (cfg.apply || {}).query || "",
       applyKey: ((cfg.apply || {}).key || []).join(", "), score: cb.score || "", target: cb.target || "", output: cb.output || "",
-      method: cb.method || "isotonic", segField: segField,
-      segValues: values.map(function (v) { return Array.isArray(v) ? v.join(", ") : v; }).join("\n"),
-      segNumeric: JSON.stringify(values).indexOf('"') < 0 && values.length > 0, moreSegments: more,
-      cohort: cb.cohort_column || "cohort", from: Math.min.apply(null, offs), to: Math.max.apply(null, offs),
+      method: cb.method || "isotonic", segs: segList.length ? segList : [newSegment()],
+      duration: contiguous ? offs.length : 2, gap: contiguous ? -offs[offs.length - 1] - 1 : 1, rawOffsets: contiguous ? null : cb.train_offsets,
+      cohortMode: fromDate ? "date" : "column", cohort: cb.cohort_column || "cohort", cohortDate: fromDate ? cf.column : "due_dt",
+      cohortTrunc: (fromDate && cf.truncate) || "month", targetFill: cb.target_fill === 0,
       uncal: cb.uncalibrated === "copy_score" ? "copy_score" : "null", job: ji.id, customImage: ji.custom, customReq: ji.req};
     flavors.dev = (cfg.dev || {}).flavor; flavors.apply = (cfg.apply || {}).flavor; flavors.job = (cfg.job || {}).flavor;
     keep.dev = rest(cfg.dev, ["query", "flavor"]);
     keep.apply = rest(cfg.apply, ["query", "flavor", "key"]);
     keep.job = rest(cfg.job, ["image", "requirements", "flavor"]);
-    var calHandled = ["method", "score", "target", "output", "segments", "cohort_column", "uncalibrated"];
-    if (JSON.stringify(offs) === JSON.stringify(rangeOffsets(st.calib.from, st.calib.to))) calHandled.push("train_offsets");
+    var calHandled = ["method", "score", "target", "output", "segments", "cohort_column", "uncalibrated", "train_offsets"];
+    if (fromDate || cf === null) calHandled.push("cohort_from");
+    if (cb.target_fill === 0 || cb.target_fill === null) calHandled.push("target_fill");
     keep.calibrate = rest(cb, calHandled);
   }
   var sinks = cfg.sinks || [];
@@ -745,7 +877,7 @@ var STORAGE = "scoring-constructor-v1";
 var state = load();
 
 function load() {
-  try { var raw = localStorage.getItem(STORAGE); if (raw) return mergeState(defaultState(), JSON.parse(raw)); } catch (e) {}
+  try { var raw = localStorage.getItem(STORAGE); if (raw) return migrateState(mergeState(defaultState(), JSON.parse(raw))); } catch (e) {}
   return exampleState();
 }
 // При первом открытии форма заполнена примером, чтобы было видно, что получится.
@@ -798,7 +930,7 @@ function imageSelect(prefix, kind, label, customPath, reqPath) {
   var html = select(prefix, label, opts, {rerender: true, hint: imageHint(get(prefix))});
   if (get(prefix) === "custom") {
     html += input(customPath, "Адрес образа", {ph: "registry/…/image:tag"});
-    if (reqPath) html += input(reqPath, "Пакеты, которые доставить (через запятую)", {ph: "numpy==1.26.0, lightgbm==3.3.5"});
+    if (reqPath) html += input(reqPath, "Пакеты, которые доставить", {ph: "numpy==1.26.0, lightgbm==3.3.5", hint: "Несколько пакетов — через запятую, с точной версией."});
   }
   return html;
 }
@@ -865,8 +997,8 @@ function renderForm() {
     (["daily", "weekdays", "weekly"].indexOf(state.schedule.kind) >= 0 ? input("schedule.time", "Время (МСК)", {type: "time"}) : "") +
     (state.schedule.kind === "custom" ? input("schedule.cron", "Cron (" + esc(state.schedule.tz || "UTC") + ")", {ph: "30 4 * * *"}) : "") + "</div>" +
     '<div class="grid2">' +
-    input("wait", "Ждать обновления таблиц", {ph: "schema.features_fresh", hint: "Процесс стартует, только когда эти таблицы обновились. Можно оставить пустым."}) +
-    input("alerts", "Куда писать при падении", {ph: "#scoring-alerts", hint: "Канал (#имя) или логины через запятую. Можно оставить пустым."}) + "</div>" +
+    input("wait", "Ждать обновления таблиц", {ph: "schema.features_fresh, schema.clients_fresh", hint: "Несколько таблиц — через запятую. Процесс стартует, только когда обновились все. Можно оставить пустым."}) +
+    input("alerts", "Куда писать при падении", {ph: "#scoring-alerts, i.ivanov", hint: "Канал (#имя) или логины. Несколько получателей — через запятую. Можно оставить пустым."}) + "</div>" +
     '<div class="grid2">' + select("size", "Объём данных", sizes, {hint: "От объёма зависят ресурсы пода."}) +
     (TEAM.domains && TEAM.domains.length > 1 ? select("domain", "Направление", TEAM.domains.map(function (d) { return [d, d]; })) : input("domain", "Направление", {ph: "collection"})) + "</div>" +
     checkbox("draft", "Черновик — проверять, но пока не публиковать") +
@@ -875,10 +1007,10 @@ function renderForm() {
 
   var data = '<section class="step">' + stepHead(3, "Данные");
   if (r === "calib") {
-    data += input("calib.devQuery", "Dev-выборка: скор + созревший факт", {textarea: true, ph: "select account_rk, due_dt, cohort, pre_score, pre_target, product_cd\nfrom usr_schema.dev_calib_in",
-      hint: "На ней калибратор обучается. Скользящее окно собирается в этом запросе или в таблице, которую он читает."}) +
+    data += input("calib.devQuery", "Dev-выборка: скор и факт за прошлые периоды", {textarea: true, ph: "select account_rk, due_dt, pre_score, pre_target, product_cd\nfrom usr_schema.dev_calib_in\nwhere due_dt < current_date",
+      hint: "На ней калибратор обучается. Нужны: скор, факт, поля сегментов и дата или готовая когорта. Строки без скора в расчёт не берутся."}) +
       input("calib.applyQuery", "Apply-выборка: новые скоры", {textarea: true, ph: "select account_rk, due_dt, cohort, pre_score, product_cd\nfrom usr_schema.apply_calib_in"}) +
-      input("calib.applyKey", "Ключ apply-выборки", {ph: "account_rk, due_dt", rerender: true, hint: "Колонки, однозначно задающие строку. Попадут в результат."});
+      input("calib.applyKey", "Ключ apply-выборки", {ph: "account_rk, due_dt", rerender: true, hint: "Одна или несколько колонок через запятую: вместе они однозначно задают строку. Попадут в результат."});
   } else {
     if (r === "dlh") data += select("source.mode", "Откуда берём", [["table", "Готовая таблица DLH"], ["query", "SQL-запрос"]], {rerender: true});
     if (r === "dlh" && state.source.mode === "table") {
@@ -888,7 +1020,7 @@ function renderForm() {
         hint: "Только нужные колонки: фичи, ключ и то, что пойдёт в результат."});
       if (r === "dlh") data += input("source.staging", "Промежуточная таблица", {ph: "usr_schema.my_process_src", hint: "Результат запроса сохраняется сюда: оператор DLH читает только таблицу."});
     }
-    data += '<div class="grid2">' + input("source.key", "Ключ выборки", {ph: "client_id", rerender: true, hint: "Колонки, однозначно задающие строку. Дубли остановят процесс до скоринга."}) +
+    data += '<div class="grid2">' + input("source.key", "Ключ выборки", {ph: "client_id, report_dt", rerender: true, hint: "Одна или несколько колонок через запятую: вместе они однозначно задают строку. Дубли остановят процесс до скоринга."}) +
       input("source.minRows", "Минимум строк", {type: "number", hint: "Если строк меньше — процесс остановится: значит, данные не пришли."}) + "</div>";
   }
   html.push(data + "</section>");
@@ -930,20 +1062,48 @@ function renderForm() {
         '<div class="grid2">' + input(p + ".name", "Короткое имя", {ph: "pd_30"}) + input(p + ".score", "Колонка скора", {ph: "score_30", rerender: true}) + "</div>" +
         input(p + ".mrid", "Ссылка в Model Registry", {ph: "team/pd_30/1.0.0"}) +
         checkbox(p + ".packed", "Упакована вместе с обработкой (<code>pack_model</code>)") +
-        (isPacked(md) ? "" : input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd"}) +
+        (isPacked(md) ? "" : input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd", hint: "Через запятую, пробел или с новой строки."}) +
           catChips(p, md.features, md.cats)) + "</div>";
     });
     m += '<div><button type="button" class="small" data-add-model="1">+ Добавить модель</button></div>';
   } else {
     m += '<div class="grid2">' + input("calib.score", "Колонка скора", {ph: "pre_score"}) + input("calib.target", "Колонка факта (0/1)", {ph: "pre_target"}) +
-      input("calib.output", "Как назвать калиброванный скор", {ph: "pre_score_calib", rerender: true}) + input("calib.cohort", "Колонка когорты", {ph: "cohort"}) + "</div>";
-    m += '<div class="grid2">' + input("calib.segField", "Поле сегмента", {ph: "product_cd"}) +
+      input("calib.output", "Как назвать калиброванный скор", {ph: "pre_score_calib", rerender: true}) +
       select("calib.method", "Метод", [["isotonic", "Изотоническая регрессия"], ["sigmoid", "Сигмоида (Платт)"]]) + "</div>";
-    m += input("calib.segValues", "Сегменты — по одному на строку", {textarea: true, ph: "CCR\nCUR\nMTG, MTF, MTB",
-      hint: "Строка с несколькими значениями через запятую — одна группа: калибруется вместе."});
-    m += checkbox("calib.segNumeric", "В данных значения сегмента — числа, а не текст");
-    m += '<div class="grid2">' + input("calib.from", "Окно обучения: с когорты", {type: "number", hint: "Относительно текущей: −3 — три когорты назад."}) +
-      input("calib.to", "по когорту", {type: "number", hint: "Сейчас используется окно с −3 по −2."}) + "</div>";
+    m += checkbox("calib.targetFill", "Пустой факт в dev считать нулём (у свежих когорт факт ещё не созрел)");
+
+    m += "<h3>Когорта</h3>";
+    m += '<div class="grid2">' + select("calib.cohortMode", "Откуда берётся когорта", [["date", "Посчитать из даты"], ["column", "Готовая колонка в обоих запросах"]], {rerender: true}) +
+      (state.calib.cohortMode === "date"
+        ? input("calib.cohortDate", "Колонка с датой", {ph: "due_dt", hint: "Должна быть и в dev, и в apply."}) +
+          select("calib.cohortTrunc", "Когорта — это начало", TRUNCATIONS, {hint: "Как date_trunc в SQL: все даты месяца попадают в одну когорту."})
+        : input("calib.cohort", "Колонка когорты", {ph: "cohort", hint: "Должна быть и в dev, и в apply."})) + "</div>";
+
+    m += "<h3>Сегменты</h3>";
+    state.calib.segs.forEach(function (seg, i) {
+      var p = "calib.segs." + i;
+      m += '<div class="model-card"><div class="row"><b>Поле сегмента ' + (i + 1) + "</b>" +
+        (state.calib.segs.length > 1 ? '<button type="button" class="link" data-remove-seg="' + i + '">Убрать</button>' : "") + "</div>" +
+        input(p + ".field", "Колонка", {ph: i ? "double" : "financial_account_subtype_cd", rerender: true}) +
+        input(p + ".values", "Значения — по одному на строку", {textarea: true, short: true, rerender: true, ph: i ? "0\n1\n2" : "CLN\nREF\nMTG, MTF, MTB, MTP",
+          hint: "Несколько значений в одной строке через запятую — одна группа: калибруется вместе."}) +
+        checkbox(p + ".numeric", "В данных это числа, а не текст") + "</div>";
+    });
+    var segTotal = segmentCount(state.calib);
+    m += '<div><button type="button" class="small" data-add-seg="1">+ Поле сегмента</button></div>';
+    m += '<p class="hint">' + (state.calib.segs.length > 1
+      ? "Поля перемножаются: каждое значение одного поля с каждым значением другого. Сейчас получается сегментов: " + segTotal + ". У каждого свой калибратор."
+      : "Сейчас сегментов: " + segTotal + ". У каждого свой калибратор. Добавьте второе поле, если калибровать нужно в разрезе двух признаков.") + "</p>";
+
+    m += "<h3>Окно обучения</h3>";
+    if (state.calib.rawOffsets) {
+      m += '<p class="hint">Окно задано в конфиге списком сдвигов: ' + esc(state.calib.rawOffsets.join(", ")) + ". " + esc(windowText(state.calib)) +
+        '</p><div><button type="button" class="small" data-reset-window="1">Задать длиной и пропуском</button></div>';
+    } else {
+      m += '<div class="grid2">' + input("calib.duration", "Сколько когорт в обучении", {type: "number", rerender: true, hint: "В вашем коде это duration_train."}) +
+        input("calib.gap", "Сколько когорт пропустить перед текущей", {type: "number", rerender: true, hint: "В вашем коде это delta_train_test. Пропуск нужен, чтобы факт успел созреть."}) + "</div>";
+      m += '<p class="hint">' + esc(windowText(state.calib)) + " T — когорта, которую калибруем; когорты считаются по порядку внутри сегмента.</p>";
+    }
     m += select("calib.uncal", "Если строку не удалось откалибровать", [["null", "Оставить пустой"], ["copy_score", "Записать исходный скор"]]);
     m += imageSelect("calib.job", "job", "Окружение калибровки", "calib.customImage", "calib.customReq");
   }
@@ -954,18 +1114,30 @@ function renderForm() {
     (r === "dlh" ? '<div class="field"><span>Режим</span><small>Таблица DLH пересоздаётся целиком при каждом запуске.</small></div>'
       : select("sink.mode", "Режим", [["replace", "Заменять содержимое"], ["append", "Дописывать (история)"]])) + "</div>";
   var req = requiredColumns(state);
-  s += '<div class="field"><span>Колонки результата</span><div class="cols">' + sinkColumns(state).map(function (c) {
+  s += '<div class="field"><span>Колонки результата</span><div class="colhead"><span>колонка</span><span>тип</span><span>размер</span><span></span></div><div class="cols">' + sinkColumns(state).map(function (c) {
     var fixed = req.indexOf(c.name) >= 0;
     var typePath = c.index >= 0 ? "sink.columns." + c.index + ".type" : "sink.types." + c.name;
     var name = fixed || c.index < 0
       ? '<input type="text" value="' + esc(c.name) + '" disabled aria-label="Колонка">'
       : '<input type="text" data-bind="sink.columns.' + c.index + '.name" data-rerender="1" value="' + esc(c.name) + '" placeholder="имя колонки" aria-label="Колонка">';
-    return '<div class="colrow">' + name + '<select data-bind="' + typePath + '" aria-label="Тип">' + COLUMN_TYPES.concat(COLUMN_TYPES.indexOf(c.type) < 0 ? [c.type] : []).map(function (t) {
-        return "<option" + (t === c.type ? " selected" : "") + ">" + esc(t) + "</option>";
-      }).join("") + "</select>" + (fixed ? '<span class="fixed">ключ / скор</span>'
+    var parts = typeParts(c.type), other = parts.custom !== undefined;
+    var typeControls = '<select class="t-base" data-typepath="' + typePath + '" aria-label="Тип">' + COLUMN_TYPES.map(function (t) {
+        return "<option" + (!other && t === parts.base ? " selected" : "") + ">" + t + "</option>";
+      }).join("") + '<option value="__other"' + (other ? " selected" : "") + ">другой…</option></select>" +
+      (other ? '<input type="text" class="t-custom" data-typepath="' + typePath + '" value="' + esc(parts.custom) + '" placeholder="тип целиком" aria-label="Тип целиком" spellcheck="false">'
+        : SIZED_TYPES[parts.base] ? '<input type="text" class="t-size" data-typepath="' + typePath + '" value="' + esc(parts.size) + '" placeholder="' + SIZED_TYPES[parts.base] + '" aria-label="Размер" inputmode="numeric">'
+        : '<span class="no-size">без размера</span>');
+    return '<div class="colrow' + (other ? " is-other" : "") + '">' + name + typeControls + (fixed ? '<span class="fixed">ключ / скор</span>'
         : '<button type="button" class="link" data-remove-col="' + c.index + '">Убрать</button>') + "</div>";
-  }).join("") + "</div><small>" + (r === "dlh" ? "Всё, кроме скора, переносится из источника как есть." : "Ключ и скоры добавляются сами. Остальные колонки должны прийти из выборки.") +
+  }).join("") + "</div><small>Размер вписывается в поле справа от типа: для <code>varchar</code> — длина, например 5; для <code>numeric</code> — точность и знаки после запятой, например 18,4. Пустой размер тоже допустим. " +
+    (r === "dlh" ? "Всё, кроме скора, переносится из источника как есть." : "Ключ и скоры добавляются сами. Остальные колонки должны прийти из выборки.") +
     '</small><div><button type="button" class="small" data-add-col="1">+ Колонка</button></div></div>';
+  s += '<details class="help" id="cols-paste-box"><summary>Вставить колонки списком</summary>' +
+    "<p>Скопируйте колонки с типами из SQL и вставьте сюда. Подойдёт список из <code>create table</code>, строки «имя тип», «имя: тип» " +
+    "или просто имена через запятую: тогда тип подберётся по имени, и его можно поправить.</p>" +
+    '<textarea id="cols-paste" spellcheck="false" aria-label="Колонки списком" placeholder="client_id bigint,\nreport_dt date,\nsegment_cd varchar(5),\nscore numeric(18,6)"></textarea>' +
+    '<div class="paste-actions"><button type="button" class="small" data-paste="add">Добавить к списку</button>' +
+    '<button type="button" class="small" data-paste="replace">Заменить список</button><span class="hint" id="cols-paste-status"></span></div></details>';
   if (r === "calib") {
     s += checkbox("report.enabled", "Сохранять отчёт калибровки (объёмы и Brier по каждой ячейке)");
     if (state.report.enabled) s += input("report.table", "Таблица отчёта", {ph: "usr_schema.my_process_report_hist"});
@@ -1007,6 +1179,16 @@ function refresh() {
 // ---------------------------------------------------------------- события
 var form = document.getElementById("form");
 form.addEventListener("input", function (e) {
+  var typePath = e.target.getAttribute("data-typepath");
+  if (typePath) {
+    // Тип колонки собирается из частей одной строки: список, размер или «тип целиком».
+    var row = e.target.closest(".colrow"), base = row.querySelector(".t-base").value;
+    var size = row.querySelector(".t-size"), custom = row.querySelector(".t-custom");
+    if (base === "__other") set(typePath, custom ? custom.value.toLowerCase().replace(/\s+/g, " ").trim() : "");
+    else set(typePath, joinType(base, size ? size.value : ""));
+    if (e.target.tagName === "SELECT") renderForm(); else refresh();
+    return;
+  }
   var path = e.target.getAttribute("data-bind");
   if (!path) return;
   var v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
@@ -1029,8 +1211,28 @@ form.addEventListener("click", function (e) {
     refresh(); return;
   }
   if (b.dataset.addModel) { state.multi.models.push(newModel()); renderForm(); return; }
+  if (b.dataset.addSeg) { state.calib.segs.push(newSegment()); renderForm(); return; }
+  if (b.dataset.removeSeg) { state.calib.segs.splice(Number(b.dataset.removeSeg), 1); renderForm(); return; }
+  if (b.dataset.resetWindow) { state.calib.rawOffsets = null; renderForm(); return; }
   if (b.dataset.removeModel) { state.multi.models.splice(Number(b.dataset.removeModel), 1); renderForm(); return; }
   if (b.dataset.addCol) { state.sink.columns.push({name: "", type: "varchar"}); renderForm(); return; }
+  if (b.dataset.paste) {
+    var parsed = parseColumns(document.getElementById("cols-paste").value), status = document.getElementById("cols-paste-status");
+    if (!parsed.columns.length) { status.textContent = "Не нашёл ни одной колонки. Нужны строки вида: имя тип."; return; }
+    if (b.dataset.paste === "replace") { state.sink.columns = []; state.sink.types = {}; }
+    parsed.columns.forEach(function (col) {
+      var have = state.sink.columns.filter(function (x) { return x.name === col.name; })[0];
+      if (have) have.type = col.type; else state.sink.columns.push({name: col.name, type: col.type});
+    });
+    var guessed = parsed.columns.filter(function (x) { return x.guessed; }).length;
+    var note = "Колонок: " + parsed.columns.length + "." + (guessed ? " Тип подобран по имени у " + guessed + " — проверьте." : "") +
+      (parsed.skipped.length ? " Не разобрал: " + parsed.skipped.slice(0, 3).join("; ") + "." : "");
+    renderForm();
+    var box = document.getElementById("cols-paste-box");
+    box.open = true;
+    document.getElementById("cols-paste-status").textContent = note;
+    return;
+  }
   if (b.dataset.removeCol) { state.sink.columns.splice(Number(b.dataset.removeCol), 1); renderForm(); return; }
 });
 

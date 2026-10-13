@@ -89,6 +89,54 @@ def legacy_calibration(dev_df: pd.DataFrame, apply_df: pd.DataFrame, segments: d
     return df_apply.merge(df_calib, on=key, how="left")
 
 
+def legacy_calibration_windowed(dev_df: pd.DataFrame, apply_df: pd.DataFrame, segments: dict, score: str, target: str,
+                                key: list, duration: int, delta: int, date_col: str = "due_dt") -> pd.DataFrame:
+    """Логика калибровки из ноутбука с параметрами duration_train / delta_train_test.
+
+    Когорта = date_trunc('month', due_dt)::varchar(10); в dev только строки со скором;
+    пустой факт = 0; сегменты — декартово произведение полей, кортеж = группа значений.
+    """
+    import itertools
+
+    from sklearn.isotonic import IsotonicRegression
+
+    def make_condition(x):
+        if isinstance(x, str):
+            return f"== '{x}'"
+        if isinstance(x, (tuple, list)):
+            return f"in {tuple(x)}"
+        return f"== {x}"
+
+    def with_cohort(frame):
+        frame = frame.copy()
+        frame["cohort"] = pd.to_datetime(frame[date_col]).dt.strftime("%Y-%m-01")
+        return frame
+
+    df_dev = with_cohort(dev_df[dev_df[score].notna()])
+    df_dev[target] = df_dev[target].fillna(0)
+    df_apply = with_cohort(apply_df)
+    df_calib = pd.DataFrame()
+    keys = list(segments.keys())
+    for segment in itertools.product(*segments.values()):
+        condition = " and ".join([f"{k} {make_condition(v)}" for k, v in zip(keys, segment)])
+        df_train_all = df_dev.query(condition).copy()
+        df_apply_segment = df_apply.query(condition).copy()
+        mths = sorted(df_train_all["cohort"].unique())
+        for i in range(duration + delta, len(mths)):
+            test_month = mths[i]
+            train_month = mths[i - duration - delta: i - delta]
+            df_train = df_train_all[df_train_all["cohort"].isin(train_month)].copy()
+            if df_train[target].nunique() < 2:
+                continue
+            calibrator = IsotonicRegression(out_of_bounds="clip")
+            calibrator.fit(df_train[score].astype("float").values, df_train[target].astype("float").values)
+            df_test = df_apply_segment[(df_apply_segment["cohort"] == test_month) & df_apply_segment[score].notna()].copy()
+            if df_test.shape[0] > 0:
+                df_test[f"{score}_calib"] = calibrator.predict(df_test[score])
+                df_calib = pd.concat([df_calib, df_test[[*key, f"{score}_calib"]]])
+    return apply_df.merge(df_calib, on=key, how="left")
+
+
 def legacy_scores(model, csv_path, features, cat_features, batch_size) -> pd.Series:
     """Как старый пайплайн: csv -> батчи -> make_lgbm_ready -> predict_proba."""
     num = [f for f in features if f not in cat_features]

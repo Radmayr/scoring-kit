@@ -92,6 +92,8 @@ def calibration_predictor_class(cfg: Calibrate, dev_path: str, report_path: str,
         "cohort_column": cfg.cohort_column,
         "train_offsets": list(cfg.train_offsets),
         "uncalibrated": cfg.uncalibrated,
+        "cohort_from": cfg.cohort_from.model_dump() if cfg.cohort_from else None,
+        "target_fill": cfg.target_fill,
     }
     header = (
         f"class {class_name}(BasePredictor):\n"

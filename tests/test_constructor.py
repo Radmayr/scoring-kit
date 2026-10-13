@@ -84,7 +84,7 @@ const [html, work] = process.argv.slice(2);
 const src = fs.readFileSync(html, "utf8");
 const grab = id => { const a = src.indexOf('<script id="' + id + '">'); return src.slice(src.indexOf(">", a) + 1, src.indexOf("</script>", a)); };
 const ctx = {}; vm.createContext(ctx);
-vm.runInContext(grab("team-presets") + "\n" + grab("logic") + "\nthis.API={defaultState,buildYaml,validate,fromConfig};", ctx);
+vm.runInContext(grab("team-presets") + "\n" + grab("logic") + "\nthis.API={defaultState,buildYaml,validate,fromConfig,parseColumns};", ctx);
 const A = ctx.API, report = {};
 function emit(name, st) {
   const dir = path.join(work, "out", name); fs.mkdirSync(dir, {recursive: true});
@@ -114,11 +114,39 @@ s.multi.models = [{name: "m1", mrid: "t/m1/2", score: "s1", packed: true, featur
 emit("t_multi_packed", s);
 s = A.defaultState(); s.recipe = "calib"; Object.assign(s, {name: "t_calib", owner: "u"});
 Object.assign(s.calib, {devQuery: "select 1", applyQuery: "select 2", applyKey: "id", score: "p", target: "y", output: "p_cal",
-  segField: "seg", segValues: "1\n2, 3", segNumeric: true});
+  segs: [{field: "seg", values: "1\n2, 3", numeric: true}]});
 s.sink.table = "s.t_calib"; s.report.table = "s.t_calib_report"; emit("t_calib", s);
+// как в ноутбуке: два поля сегментов, 4 когорты с пропуском 1, когорта из даты, пустой факт = 0
+s.name = "t_calib_window"; s.sink.table = "s.t_calib_window"; s.report.table = "s.t_calib_window_report";
+Object.assign(s.calib, {segs: [{field: "product_cd", values: "CLN\nREF\nMTG, MTF, MTB, MTP", numeric: false},
+                               {field: "double", values: "0\n1\n2", numeric: true}],
+  duration: 4, gap: 1, cohortMode: "date", cohortDate: "due_dt", cohortTrunc: "month", targetFill: true});
+emit("t_calib_window", s);
 for (const f of fs.readdirSync(path.join(work, "in"))) {
   emit("import_" + f.replace(".json", ""), A.fromConfig(JSON.parse(fs.readFileSync(path.join(work, "in", f), "utf8"))));
 }
+// колонки, вставленные списком, и типы с размером
+const pasted = {
+  ddl: "create table s.x (\n  customer_rk bigint not null,\n  segment_cd character varying(5) default 'A',\n  score numeric(18, 6), -- скор\n  upd timestamp without time zone\n) distributed by (customer_rk);",
+  lines: "id bigint,\nreport_dt date,\nsegment_cd varchar(5)",
+  tabs: "column_name\tdata_type\nparty_rk\tbigint\nproduct_cd\tcharacter varying",
+  names: "client_id, report_dt, product_cd",
+  junk: "select 1 from 2",
+};
+const parsed = {};
+for (const k of Object.keys(pasted)) {
+  const r = A.parseColumns(pasted[k]);
+  parsed[k] = {columns: r.columns.map(c => [c.name, c.type, c.guessed]), skipped: r.skipped.length};
+}
+s = A.defaultState();
+Object.assign(s, {name: "t_types", owner: "u"}); Object.assign(s.source, {query: "select 1", key: "id"});
+Object.assign(s.model, {mrid: "t/m/1"}); s.sink.table = "s.t_types";
+s.sink.columns = A.parseColumns(pasted.lines).columns.concat([{name: "amount", type: "numeric(18,4)"}]);
+emit("t_types", s);
+s.sink.columns.push({name: "broken", type: "varchar(5"});
+report.bad_type = A.validate(s).map(p => p.text);
+fs.writeFileSync(path.join(work, "parsed.json"), JSON.stringify({parsed, bad_type: report.bad_type}));
+delete report.bad_type;
 console.log(JSON.stringify(report));
 """
 
@@ -154,7 +182,28 @@ def test_form_logic_builds_valid_and_lossless_configs(tmp_path):
     assert load_pipeline(tmp_path / "out" / "t_dlh").model.packed          # новый процесс на DLH — упакованная модель
     assert [m.packed for m in load_pipeline(tmp_path / "out" / "t_multi_packed").models] == [True, True, False]
     assert load_pipeline(tmp_path / "out" / "t_dlh").sinks[0].mode == "replace"
+
+    # типы с размером доходят до конфига как есть
+    assert load_pipeline(tmp_path / "out" / "t_types").sinks[0].columns == {
+        "id": "bigint", "report_dt": "date", "segment_cd": "varchar(5)", "amount": "numeric(18,4)", "score": "numeric"}
+    extra = json.loads((tmp_path / "parsed.json").read_text(encoding="utf-8"))
+    parsed = extra["parsed"]
+    assert parsed["ddl"]["columns"] == [
+        ["customer_rk", "bigint", False], ["segment_cd", "varchar(5)", False], ["score", "numeric(18,6)", False],
+        ["upd", "timestamp without time zone", False]]
+    assert parsed["lines"]["columns"] == [["id", "bigint", False], ["report_dt", "date", False], ["segment_cd", "varchar(5)", False]]
+    assert parsed["tabs"] == {"columns": [["party_rk", "bigint", False], ["product_cd", "varchar", False]], "skipped": 0}
+    assert parsed["names"]["columns"] == [["client_id", "bigint", True], ["report_dt", "date", True], ["product_cd", "varchar", True]]
+    assert parsed["junk"] == {"columns": [], "skipped": 1}
+    assert any("varchar(5" in text for text in extra["bad_type"])
     assert load_pipeline(tmp_path / "out" / "t_calib").calibrate.segments == {"seg": [1, [2, 3]]}
+    assert load_pipeline(tmp_path / "out" / "t_calib").calibrate.train_offsets == [-3, -2]
+    window = load_pipeline(tmp_path / "out" / "t_calib_window").calibrate
+    assert window.segments == {"product_cd": ["CLN", "REF", ["MTG", "MTF", "MTB", "MTP"]], "double": [0, 1, 2]}
+    assert window.train_offsets == [-5, -4, -3, -2]
+    assert window.cohort_from.column == "due_dt" and window.cohort_from.truncate == "month"
+    assert window.target_fill == 0
+    render_dir(tmp_path / "out" / "t_calib_window")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")

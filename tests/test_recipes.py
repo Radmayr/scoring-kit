@@ -14,7 +14,8 @@ from scoring_kit.render import render_dir
 from scoring_kit.spec import PipelineError, load_pipeline
 from scoring_kit.stubs import load_dag
 from tests.conftest import CAT_FEATURES, DEMO, FEATURES, ROOT, make_frame
-from tests.legacy import legacy_calibration, legacy_multi_scores, legacy_scores, make_lgbm_ready
+from tests.legacy import (legacy_calibration, legacy_calibration_windowed, legacy_multi_scores, legacy_scores,
+                          make_lgbm_ready)
 from tests.test_render import BUILTINS, _free_globals, _top_level_objects
 
 MULTI = ROOT / "examples" / "demo_multi"
@@ -235,6 +236,77 @@ def test_calibration_copy_score(tmp_path):
     assert s["base_score_calib"].notna().all()
     new = s["product_cd"] == "NEW"
     np.testing.assert_array_equal(s.loc[new, "base_score_calib"], s.loc[new, "base_score"])
+
+
+def windowed_data(seed=3):
+    """Два поля сегментов (продукт с группой и числовой признак), даты вместо готовой когорты."""
+    rng = np.random.default_rng(seed)
+    months = pd.date_range("2025-01-01", periods=10, freq="MS")
+    products = ["CLN", "REF", "MTG", "MTF", "MTB", "MTP", "XXX"]
+
+    def frame(n, start_id, month_pool):
+        month = rng.choice(len(month_pool), n)
+        day = rng.integers(0, 28, n)
+        df = pd.DataFrame({
+            "account_id": np.arange(n) + start_id,
+            "report_dt": "2026-09-01",
+            "due_dt": [(month_pool[m] + pd.Timedelta(days=int(d))).strftime("%Y-%m-%d") for m, d in zip(month, day)],
+            "base_score": rng.uniform(0.01, 0.6, n).round(6),
+            "product_cd": rng.choice(products, n),
+            "double": rng.choice([0, 1, 2], n),
+        })
+        return df
+
+    dev = frame(30000, 0, months)
+    dev["base_target"] = (rng.random(len(dev)) < dev["base_score"] * 0.8).astype(float)
+    recent = pd.to_datetime(dev["due_dt"]) >= months[-2]
+    dev.loc[recent, "base_target"] = np.nan                    # у свежих когорт факт ещё не созрел
+    dev.loc[rng.random(len(dev)) < 0.02, "base_score"] = np.nan   # строки без скора
+    apply = frame(4000, 500000, months[4:])
+    apply.loc[rng.random(len(apply)) < 0.02, "base_score"] = np.nan
+    return dev, apply
+
+
+WINDOWED_SEGMENTS = {"product_cd": ["CLN", "REF", ["MTG", "MTF", "MTB", "MTP"]], "double": [0, 1, 2]}
+
+
+def test_calibration_window_segments_and_date_cohort_match_notebook(tmp_path):
+    """duration_train=4, delta_train_test=1, два поля сегментов, когорта из даты, пустой факт = 0."""
+    d = patched(
+        tmp_path, CALIB,
+        calibrate__segments=WINDOWED_SEGMENTS,
+        calibrate__train_offsets=[-5, -4, -3, -2],
+        calibrate__cohort_from={"column": "due_dt", "truncate": "month"},
+        calibrate__target_fill=0,
+    )
+    dev, apply = windowed_data()
+    dev.to_csv(tmp_path / "dev.csv", index=False)
+    apply.to_csv(tmp_path / "apply.csv", index=False)
+    result = run_debug(d, {"read_dev": tmp_path / "dev.csv", "read_apply": tmp_path / "apply.csv"}, [], tmp_path / "out")
+    legacy = legacy_calibration_windowed(
+        pd.read_csv(tmp_path / "dev.csv"), pd.read_csv(tmp_path / "apply.csv"), WINDOWED_SEGMENTS,
+        "base_score", "base_target", ["account_id", "report_dt"], duration=4, delta=1,
+    )
+    got = result.scored.set_index("account_id")["base_score_calib"]
+    exp = legacy.set_index("account_id")["base_score_calib"].reindex(got.index)
+    assert got.notna().sum() > 1000
+    np.testing.assert_array_equal(got.isna().to_numpy(), exp.isna().to_numpy())
+    np.testing.assert_allclose(got.dropna().to_numpy(), exp.dropna().to_numpy(), rtol=0, atol=1e-12)
+    report = result.to_write["sandbox.demo_calib_report_hist"]
+    assert report["segment"].nunique() == 9                    # 3 продукта x 3 значения double
+    assert report["cohort"].dropna().str.match(r"\d{4}-\d{2}-01").all()
+
+
+def test_calibration_empty_target_needs_explicit_fill(tmp_path):
+    d = patched(
+        tmp_path, CALIB, calibrate__segments=WINDOWED_SEGMENTS, calibrate__train_offsets=[-2, -1],
+        calibrate__cohort_from={"column": "due_dt", "truncate": "month"},
+    )
+    dev, apply = windowed_data()
+    dev.to_csv(tmp_path / "dev.csv", index=False)
+    apply.to_csv(tmp_path / "apply.csv", index=False)
+    with pytest.raises(Exception, match="target_fill"):
+        run_debug(d, {"read_dev": tmp_path / "dev.csv", "read_apply": tmp_path / "apply.csv"}, [], tmp_path / "out")
 
 
 @pytest.mark.parametrize(

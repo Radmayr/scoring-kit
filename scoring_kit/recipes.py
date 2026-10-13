@@ -178,10 +178,12 @@ def multi_model(b: DagBuilder, p: Pipeline) -> None:
 def fit_apply(b: DagBuilder, p: Pipeline) -> None:
     first = _start(b, p, blocks.gp_sensor)
     cfg = p.calibrate
-    dev_required = list(dict.fromkeys([cfg.score, cfg.target, cfg.cohort_column, *cfg.segments]))
-    produced = {cfg.output}
+    # Когорта либо приходит из запроса, либо считается из даты: тогда из запроса нужна дата.
+    cohort_source = cfg.cohort_from.column if cfg.cohort_from else cfg.cohort_column
+    dev_required = list(dict.fromkeys([cfg.score, cfg.target, cohort_source, *cfg.segments]))
+    produced = {cfg.output} | ({cfg.cohort_column} if cfg.cohort_from else set())
     passthrough = [c for s in p.sinks if s.data == "result" for c in s.columns if c not in produced]
-    apply_required = list(dict.fromkeys([cfg.score, cfg.cohort_column, *cfg.segments, *p.apply.key, *passthrough]))
+    apply_required = list(dict.fromkeys([cfg.score, cohort_source, *cfg.segments, *p.apply.key, *passthrough]))
     dev = blocks.gp_read(b, p, "read_dev", p.dev.query, p.dev.flavor, p.dev.min_rows, dev_required, [])
     apply = blocks.gp_read(b, p, "read_apply", p.apply.query, p.apply.flavor, p.apply.min_rows, apply_required, p.apply.key)
     if first:

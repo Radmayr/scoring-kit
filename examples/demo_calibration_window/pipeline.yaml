@@ -1,0 +1,68 @@
+# Калибровка в разрезе двух признаков со скользящим окном.
+# Повторяет логику ноутбука: duration_train = 4, delta_train_test = 1, когорта = месяц даты,
+# пустой факт у свежих когорт считается нулём.
+recipe: fit_apply
+dag_id: demo_calibration_window
+description: Калибровка скора по продукту и признаку double со скользящим окном
+owner: your.login
+domain: collection
+schedule: "0 10 * * *"
+
+wait_for:
+  tables: [sandbox.dg_dpd_calibration_dm, sandbox.score_30_dm]
+
+dev:                             # скор и факт за прошлые периоды
+  query: |
+    select account_rk, due_dt, score_30, target_30, financial_account_subtype_cd, double
+    from sandbox.dg_dpd_calibration_dm
+    where due_dt < current_date
+apply:                           # новые скоры, которые нужно откалибровать
+  query: |
+    select account_rk, due_dt, score_30, financial_account_subtype_cd, double
+    from sandbox.score_30_dm
+  key: [account_rk, due_dt]
+
+job:
+  image: registry.example/python/3.10/base:latest
+  requirements: [pandas==2.1.4, scikit-learn==1.3.2]
+  flavor: 4cpu-16ram
+
+calibrate:
+  method: isotonic
+  score: score_30
+  target: target_30
+  output: score_30_calib
+  segments:                      # поля перемножаются: 9 продуктовых сегментов x 3 значения double = 27
+    financial_account_subtype_cd: [CLN, REF, ALR, SLN, SCA, CAR, CLA, SCL, [MTG, MTF, MTB, MTP]]
+    double: [0, 1, 2]
+  cohort_column: cohort
+  cohort_from:                   # когорта считается из даты, в запросах её нет
+    column: due_dt
+    truncate: month
+  target_fill: 0                 # пустой факт в dev = 0
+  train_offsets: [-5, -4, -3, -2]    # обучение на 4 когортах, пропуск 1
+  uncalibrated: null
+
+sinks:
+  - table: sandbox.score_30_dm_calib
+    mode: replace
+    columns:
+      account_rk: bigint
+      due_dt: date
+      score_30: numeric
+      score_30_calib: numeric
+  - table: sandbox.score_30_calib_report_hist
+    data: report
+    mode: append
+    add_scored_at: true
+    actualize: false
+    columns:
+      segment: varchar
+      cohort: varchar
+      status: varchar
+      train_cohorts: varchar
+      train_rows: int
+      test_rows: int
+      apply_rows: int
+      brier_raw: numeric
+      brier_calibrated: numeric

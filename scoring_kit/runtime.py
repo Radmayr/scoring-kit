@@ -297,6 +297,9 @@ def sk_calibrate(dev, apply, cfg):
     когорты dev сортируются; для когорты на позиции i калибратор обучается на когортах с
     позициями i + train_offsets и применяется к строкам apply той же когорты.
     Возвращает (apply + колонка калиброванного скора, отчёт по ячейкам).
+
+    cohort_from — посчитать когорту из даты (как date_trunc в SQL) вместо готовой колонки;
+    target_fill — чем заменить пустой факт в dev (незрелые когорты); строки dev без скора не участвуют.
     """
     import itertools
 
@@ -307,6 +310,34 @@ def sk_calibrate(dev, apply, cfg):
     cohort, offsets, method = cfg["cohort_column"], sorted(cfg["train_offsets"]), cfg["method"]
     first = -min(offsets)
     fields = list(cfg["segments"])
+
+    cohort_from = cfg.get("cohort_from")
+    if cohort_from:
+        freq = {"day": "D", "week": "W-SUN", "month": "M", "quarter": "Q", "year": "Y"}[cohort_from["truncate"]]
+
+        def to_cohort(frame, name):
+            raw = frame[cohort_from["column"]]
+            dates = pd.to_datetime(raw, errors="coerce")
+            broken = raw.notna() & dates.isna()
+            if broken.any():
+                raise ValueError(
+                    f"[scoring-kit] {name}: в колонке {cohort_from['column']} не даты: "
+                    f"{list(raw[broken].astype(str).unique()[:5])}"
+                )
+            # начало периода строкой ГГГГ-ММ-ДД — как date_trunc(...)::varchar(10)
+            return dates.dt.to_period(freq).dt.start_time.dt.strftime("%Y-%m-%d")
+
+        dev, apply = dev.copy(), apply.copy()
+        dev[cohort] = to_cohort(dev, "dev")
+        apply[cohort] = to_cohort(apply, "apply")
+
+    no_score = dev[score].isna()
+    if no_score.any():
+        print(f"[scoring-kit] dev: {int(no_score.sum())} строк без скора не участвуют в калибровке")
+        dev = dev[~no_score]
+    if cfg.get("target_fill") is not None:
+        dev = dev.copy()
+        dev[target] = pd.to_numeric(dev[target], errors="coerce").fillna(cfg["target_fill"])
 
     def fit(x, y):
         if method == "isotonic":
@@ -365,12 +396,19 @@ def sk_calibrate(dev, apply, cfg):
                 row["status"] = "нет данных для обучения"
                 report.append(row)
                 continue
+            if train[target].isna().any():
+                raise ValueError(
+                    f"[scoring-kit] сегмент {segment}, когорта {test_cohort}: в обучающих когортах {train_cohorts} "
+                    f"пустой факт ({int(train[target].isna().sum())} строк). Отфильтруйте их в запросе dev "
+                    "или задайте calibrate.target_fill: 0"
+                )
             predict = fit(train[score].astype(float).to_numpy(), train[target].astype(float).to_numpy())
             if len(test):
                 row["brier_raw"] = brier(test[target], test[score])
                 row["brier_calibrated"] = brier(test[target], predict(test[score].astype(float).to_numpy()))
-            if len(target_rows):
-                calibrated.loc[target_rows.index] = predict(target_rows[score].astype(float).to_numpy())
+            scorable = target_rows[target_rows[score].notna()]
+            if len(scorable):
+                calibrated.loc[scorable.index] = predict(scorable[score].astype(float).to_numpy())
             row["status"] = "ok"
             report.append(row)
 
