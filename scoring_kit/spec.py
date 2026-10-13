@@ -398,6 +398,10 @@ class Pipeline(_Strict):
     domain: Optional[str] = Field(None, description="группа процессов: каталог и теги Airflow")
     schedule: Optional[str] = Field(None, description="cron в часовом поясе timezone; null — только вручную")
     draft: bool = Field(False, description="черновик: проверяется и собирается, но scoring publish его не публикует")
+    shadow: bool = Field(
+        False,
+        description="процесс в тени: на тестовый инстанс уходит теневая версия (_shadow), на боевой не публикуется",
+    )
     timezone: str = "UTC"
     start_date: dt.date = dt.date(2025, 1, 1)
     tags: list[str] = []

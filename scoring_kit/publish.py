@@ -3,7 +3,7 @@
 mlc публикует папку целиком и удаляет с инстанса всё, что было опубликовано через mlc и
 чего нет в папке. Тестовый и боевой инстансы пишут в один Greenplum. Отсюда правила:
 
-- test: теневые версии процессов из shadow.txt + dags_manual/test/ (или dags_manual/*.py);
+- test: теневые версии процессов с `shadow: true` (и из shadow.txt) + dags_manual/test/ (или dags_manual/*.py);
 - prod: боевые версии всех процессов, кроме тех, что в shadow.txt, + dags_manual/prod/;
 - пустой набор не публикуется никогда;
 - перед публикацией — `mlc ... --check` и подтверждение.
@@ -67,19 +67,45 @@ def pipeline_dirs(root: Path) -> list[Path]:
 
 
 def shadow_dirs(root: Path) -> list[Path]:
+    """Процессы в тени: `shadow: true` в их pipeline.yaml и, для совместимости, строки shadow.txt."""
+    dirs = []
     path = root / SHADOW_FILE
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            d = (root / line.rstrip("/")).resolve()
+            if not (d / "pipeline.yaml").exists():
+                raise PipelineError(f"{SHADOW_FILE}: нет процесса {line}")
+            dirs.append(d)
+    for d in pipeline_dirs(root):
+        if load_pipeline(d).shadow and d.resolve() not in dirs:
+            dirs.append(d.resolve())
+    return dirs
+
+
+APPROVERS_FILE = "approvers.txt"
+
+
+def approvers(root: Path) -> list[str]:
+    """Логины тех, кому разрешено публиковать на боевой инстанс (по одному на строку)."""
+    path = root / APPROVERS_FILE
     if not path.exists():
         return []
-    dirs = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        d = (root / line.rstrip("/")).resolve()
-        if not (d / "pipeline.yaml").exists():
-            raise PipelineError(f"{SHADOW_FILE}: нет процесса {line}")
-        dirs.append(d)
-    return dirs
+    lines = (line.split("#")[0].strip() for line in path.read_text(encoding="utf-8").splitlines())
+    return [line for line in lines if line]
+
+
+def check_approver(root: Path, user: str) -> None:
+    allowed = approvers(root)
+    if not allowed:
+        raise PipelineError(f"{APPROVERS_FILE}: файл пуст или отсутствует — некому разрешено публиковать на прод")
+    if user not in allowed:
+        raise PipelineError(
+            f"{user or '(логин не определён)'}: нет права публиковать на боевой инстанс. "
+            f"Разрешено: {', '.join(allowed)} ({APPROVERS_FILE})"
+        )
 
 
 def _manual_files(root: Path, env: str) -> list[Path]:

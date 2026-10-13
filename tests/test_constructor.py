@@ -235,3 +235,45 @@ def test_page_scripts_parse(tmp_path, script_id):
     path.write_text(code, encoding="utf-8")
     res = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, encoding="utf-8")
     assert res.returncode == 0, res.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
+def test_gitlab_flow_on_fake_server(tmp_path):
+    """Кнопки конструктора: отправка в GitLab, проверки, слияние и выкладка — на имитации GitLab API."""
+    page = tmp_path / "constructor.html"
+    page.write_text(build_constructor(), encoding="utf-8")
+    res = subprocess.run(["node", str(ROOT / "tests" / "gitlab_flow.js"), str(page)], capture_output=True, text=True,
+                         encoding="utf-8")
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+
+    test = out["test_flow"]
+    assert test["committed"] and test["shadow"] and test["merges"] == 1
+    assert test["mr"]["file"] == "pipelines/new_one/pipeline.yaml" and test["branch"].startswith("constructor/new_one-")
+    assert [s["phase"] for s in test["steps"]] == ["checks", "checks", "checks", "deploying", "deploying", "done"]
+    assert "new_one_shadow" in test["steps"][-1]["text"]
+
+    prod = out["prod_flow"]
+    assert not prod["shadow"]
+    assert [s["phase"] for s in prod["steps"]] == ["checks", "deploying", "approve", "done"]
+    assert prod["steps"][2]["action"] and "боевой" in prod["steps"][-1]["text"]
+    assert out["prod_denied"]["phase"] == "failed" and "approvers.txt" in out["prod_denied"]["text"]
+
+    assert out["checks_failed"]["status"]["phase"] == "failed" and not out["checks_failed"]["merged"]
+    assert out["cannot_merge"]["phase"] == "merging" and out["cannot_merge_after"]["phase"] == "done"
+    assert out["update_existing"] == {"existed": True, "file": "pipelines/old_one/pipeline.yaml",
+                                      "folders": ["pipelines/old_one/pipeline.yaml"]}
+    assert "уже есть в GitLab" in out["name_taken"]
+    assert "такой же конфиг" in out["same_config"]
+    assert "токен" in out["bad_token"] and "Нет связи" in out["offline"]
+    assert out["list"] == ["a", "b", "old_one"]
+    assert [s["phase"] for s in out["manual_test"]] == ["approve", "done"]
+
+
+def test_gitlab_presets():
+    team = _team(build_constructor({**PRESETS, "gitlab": {"url": "https://gitlab.example/", "project": "team/pipes"}}))
+    assert team["gitlab"] == {"url": "https://gitlab.example", "project": "team/pipes", "branch": "main",
+                              "jobs": {"test": "deploy-test", "prod": "deploy-prod"}}
+    assert _team(build_constructor(PRESETS))["gitlab"]["url"] == ""
+    with pytest.raises(PresetsError, match="оба поля"):
+        check_presets({"gitlab": {"url": "https://gitlab.example"}})

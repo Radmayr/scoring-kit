@@ -70,7 +70,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .field { display: grid; gap: 5px; min-width: 0; }
 .field > span { font-weight: 500; font-size: 14px; }
 .field small, .hint { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
-input[type=text], input[type=time], input[type=number], select, textarea {
+input[type=text], input[type=password], input[type=time], input[type=number], select, textarea {
   font: 14px/1.4 var(--font-body); color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 100%; box-sizing: border-box; min-width: 0;
 }
@@ -147,6 +147,18 @@ details.help pre.yaml { background: var(--surface); max-height: none; }
 .preset-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .preset-card > .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .step h3 { font: 600 14.5px/1.3 var(--font-body); margin-top: 6px; }
+.send-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
+.send-row select { flex: 1 1 160px; }
+.send-row[hidden] { display: none; }
+#send-on { display: grid; gap: 10px; }
+#send-on[hidden] { display: none; }
+#send-status { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+#send-status[hidden] { display: none; }
+.send-state { font-size: 14px; font-weight: 500; }
+.send-state.ok { color: var(--ok); }
+.send-state.bad { color: var(--check); }
+.send-state.wait { color: var(--ink); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
 .example-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); color: var(--ink); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -175,6 +187,44 @@ details.help pre.yaml { background: var(--surface); max-height: none; }
       <section class="card">
         <h2>Проверка</h2>
         <div id="problems"></div>
+      </section>
+      <section class="card" id="send-card">
+        <h2>Отправить на инстанс</h2>
+        <label class="field"><span>Куда</span>
+          <select id="send-stage">
+            <option value="test">Сначала на тест (в тени)</option>
+            <option value="prod">Сразу на боевой инстанс</option>
+          </select>
+          <small id="send-stage-hint"></small>
+        </label>
+        <label class="check"><input type="checkbox" id="send-replaces"> <span>Процесс заменяет существующий или пишет в уже используемую таблицу</span></label>
+        <p class="hint" id="send-off" hidden>Отправка в GitLab включается в сборке конструктора для команды. В этой версии конфиг можно скопировать ниже.</p>
+        <div id="send-on" hidden>
+          <label class="field"><span>Личный токен GitLab</span>
+            <input type="password" id="gl-token" autocomplete="off" placeholder="glpat-…">
+            <small>Создаётся в GitLab: аватар → Preferences → Access tokens, право <code>api</code>. Хранится только в этом браузере.</small>
+          </label>
+          <div class="send-row">
+            <button type="button" class="small" id="gl-check">Проверить доступ</button>
+            <span class="hint" id="gl-user"></span>
+          </div>
+          <div class="send-row" id="gl-open-row" hidden>
+            <select id="gl-existing" aria-label="Процесс из GitLab"></select>
+            <button type="button" class="small" id="gl-open">Открыть из GitLab</button>
+          </div>
+          <div class="send-row">
+            <button type="button" class="primary" id="send-go">Отправить</button>
+            <span class="hint" id="send-hint"></span>
+          </div>
+          <div id="send-status" hidden>
+            <p class="send-state" id="send-text"></p>
+            <div class="send-row">
+              <button type="button" class="primary" id="send-action" hidden></button>
+              <a id="send-link" target="_blank" rel="noopener"></a>
+              <button type="button" class="link" id="send-clear">Скрыть</button>
+            </div>
+          </div>
+        </div>
       </section>
       <section class="card">
         <h2>Готовый конфиг</h2>
@@ -209,6 +259,7 @@ details.help pre.yaml { background: var(--surface); max-height: none; }
 var TEAM = {
   "gp_service": "vrcl",
   "gitlab_new_file_url": "",
+  "gitlab": {"url": "", "project": "", "branch": "main"},
   "domains": ["collection"],
   "images": [
     {"id": "lgbm", "kind": "model", "label": "LightGBM 3.3.5", "image": "registry.example/mlops/lgbm:latest", "requirements": ["numpy==1.26.0", "pandas==2.1.1", "lightgbm==3.3.5"]},
@@ -305,6 +356,8 @@ function defaultState() {
   return {
     recipe: "single",
     name: "", description: "", owner: "", domain: (TEAM.domains || [""])[0] || "", draft: false,
+    stage: "test", replaces: false, tracking: null,
+    folder: "",        // папка процесса в GitLab, если он открыт оттуда (имя папки может отличаться от имени DAG'а)
     gpService: TEAM.gp_service || "",
     schedule: {kind: "daily", time: "07:30", dow: "1", cron: "", orig: "", tz: ""},
     alerts: "", wait: "", size: "medium", flavors: {},
@@ -552,6 +605,7 @@ function buildYaml(st) {
   if (st.schedule.orig && st.schedule.kind !== "custom" && toCron(fromCron(st.schedule.orig)) === cron) cron = st.schedule.orig;
   out.push("schedule: " + (cron ? q(cron) : "null") + "    # " + scheduleText(st.schedule));
   if (st.draft) out.push("draft: true    # черновик: проверяется, но не публикуется");
+  if (st.stage === "test") out.push("shadow: true    # в тени: на тест уходит версия _shadow, на боевой инстанс процесс не публикуется");
   if (st.recipe !== "dlh" && st.gpService) out.push("gp_service: " + q(st.gpService));
   out = out.concat(kept("top", 0));
 
@@ -806,8 +860,9 @@ function fromConfig(cfg) {
   st.recipe = cfg.recipe === "multi_model" ? "multi" : cfg.recipe === "fit_apply" ? "calib" : (cfg.engine === "dlh" ? "dlh" : "single");
   st.name = cfg.dag_id || ""; st.description = cfg.description || ""; st.owner = cfg.owner || "";
   st.domain = cfg.domain || ""; st.draft = !!cfg.draft;
+  st.stage = cfg.shadow ? "test" : "prod";
   st.gpService = st.recipe === "dlh" ? "" : (cfg.gp_service || "");
-  keep.top = rest(cfg, ["recipe", "engine", "dag_id", "description", "owner", "domain", "schedule", "draft", "alerts", "wait_for",
+  keep.top = rest(cfg, ["recipe", "engine", "dag_id", "description", "owner", "domain", "schedule", "draft", "shadow", "alerts", "wait_for",
     "source", "model", "models", "model_defaults", "dlh", "dev", "apply", "job", "calibrate", "sinks"].concat(st.recipe === "dlh" ? [] : ["gp_service"]));
   st.schedule = fromCron(cfg.schedule);
   if (cfg.timezone && cfg.timezone !== "UTC") {
@@ -917,6 +972,141 @@ function fromConfig(cfg) {
     return places.every(function (p) { return flavors[p] === SIZES[k].flavor; });
   })[0] || "keep";
   return st;
+}
+
+// ---------------------------------------------------------------- GitLab: отправка процесса и статус выкладки
+// Клиент не зависит от страницы: fetch передаётся снаружи, поэтому логика проверяется тестами.
+function gitlabConfig() {
+  var g = TEAM.gitlab || {};
+  if (!g.url || !g.project) return null;
+  return {url: String(g.url).replace(/\/+$/, ""), project: g.project, branch: g.branch || "main",
+    jobs: {test: (g.jobs || {}).test || "deploy-test", prod: (g.jobs || {}).prod || "deploy-prod"}};
+}
+function gitlabMessage(status, data) {
+  var detail = data && typeof data === "object" ? (data.message || data.error || "") : (data || "");
+  if (typeof detail !== "string") detail = JSON.stringify(detail);
+  if (status === 401) return "GitLab не принял токен. Проверьте, что он не истёк и у него есть право api.";
+  if (status === 403) return "В проекте не хватает прав на это действие." + (detail ? " GitLab: " + detail : "");
+  if (status === 404) return "GitLab не нашёл проект или файл. Проверьте, что у вас есть доступ к проекту.";
+  return "GitLab ответил ошибкой " + status + (detail ? ": " + detail : "") + ".";
+}
+function gitlabClient(cfg, token, fetchImpl) {
+  var api = cfg.url + "/api/v4", project = api + "/projects/" + encodeURIComponent(cfg.project);
+  function call(method, url, body, raw) {
+    var options = {method: method, headers: {"PRIVATE-TOKEN": token}};
+    if (body !== undefined) { options.headers["Content-Type"] = "application/json"; options.body = JSON.stringify(body); }
+    return fetchImpl(url, options).then(function (res) {
+      return res.text().then(function (text) {
+        var data = text;
+        if (!raw || !res.ok) { try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; } }
+        if (!res.ok) { var err = new Error(gitlabMessage(res.status, data)); err.status = res.status; throw err; }
+        return data;
+      });
+    }, function () {
+      var err = new Error("Нет связи с GitLab (" + cfg.url + "). Страница должна быть открыта внутри сети компании.");
+      err.status = 0; throw err;
+    });
+  }
+  var self = {
+    whoami: function () { return call("GET", api + "/user"); },
+    project: function () { return call("GET", project); },
+    // Текст файла из основной ветки или null, если файла нет.
+    getFile: function (path) {
+      return call("GET", project + "/repository/files/" + encodeURIComponent(path) + "/raw?ref=" + encodeURIComponent(cfg.branch), undefined, true)
+        .then(function (text) { return text; }, function (err) { if (err.status === 404) return null; throw err; });
+    },
+    listPipelines: function () {
+      return call("GET", project + "/repository/tree?path=pipelines&per_page=100&ref=" + encodeURIComponent(cfg.branch))
+        .then(function (items) { return (items || []).filter(function (x) { return x.type === "tree"; }).map(function (x) { return x.name; }).sort(); });
+    },
+    // Ветка с одним коммитом (конфиг процесса) и merge request в основную ветку.
+    submit: function (job) {
+      var folder = job.folder || job.name;
+      var file = "pipelines/" + folder + "/pipeline.yaml", branch = "constructor/" + folder + "-" + job.stamp, existed;
+      return self.getFile(file).then(function (current) {
+        existed = current !== null;
+        if (existed && !job.folder) {
+          var taken = new Error("Процесс с именем " + job.name + " уже есть в GitLab. Чтобы изменить его, откройте его кнопкой «Открыть из GitLab»; для нового процесса выберите другое имя.");
+          taken.status = -1; throw taken;
+        }
+        if (existed && current === job.yaml) { var same = new Error("В GitLab уже лежит точно такой же конфиг — отправлять нечего."); same.status = -1; throw same; }
+        return call("POST", project + "/repository/commits", {branch: branch, start_branch: cfg.branch, commit_message: job.title,
+          actions: [{action: existed ? "update" : "create", file_path: file, content: job.yaml}]});
+      }).then(function () {
+        return call("POST", project + "/merge_requests", {source_branch: branch, target_branch: cfg.branch, title: job.title,
+          description: job.description, remove_source_branch: true});
+      }).then(function (mr) { return {iid: mr.iid, url: mr.web_url, branch: branch, file: file, existed: existed}; });
+    },
+    mergeRequest: function (iid) { return call("GET", project + "/merge_requests/" + iid); },
+    autoMerge: function (iid) {
+      return call("PUT", project + "/merge_requests/" + iid + "/merge",
+        {merge_when_pipeline_succeeds: true, auto_merge: true, should_remove_source_branch: true});
+    },
+    pipelineFor: function (sha) {
+      return call("GET", project + "/pipelines?per_page=1&sha=" + encodeURIComponent(sha)).then(function (list) { return (list || [])[0] || null; });
+    },
+    jobs: function (pipelineId) { return call("GET", project + "/pipelines/" + pipelineId + "/jobs?per_page=100"); },
+    play: function (jobId) { return call("POST", project + "/jobs/" + jobId + "/play"); }
+  };
+  return self;
+}
+
+var RUNNING = ["created", "waiting_for_resource", "preparing", "pending", "running", "scheduled"];
+// Где сейчас отправленный процесс. Возвращает {phase, tone, text, link, linkText, action}.
+// phase: checks | merging | deploying | approve | done | failed. Попутно включает автослияние.
+function trackStatus(client, cfg, tracking) {
+  var target = tracking.target, place = target === "prod" ? "боевой инстанс" : "тестовый инстанс";
+  function out(phase, tone, text, link, linkText, action) {
+    return {phase: phase, tone: tone, text: text, link: link || tracking.url, linkText: linkText || "merge request", action: action || null};
+  }
+  return client.mergeRequest(tracking.iid).then(function (mr) {
+    var pipeline = mr.head_pipeline, pipeLink = pipeline && pipeline.web_url;
+    if (mr.state === "closed") return out("failed", "bad", "Merge request закрыт без слияния. Процесс не опубликован.");
+    if (mr.state !== "merged") {
+      if (pipeline && pipeline.status === "failed")
+        return out("failed", "bad", "Проверки не прошли: в конфиге ошибка. Откройте лог, поправьте форму и отправьте заново.", pipeLink, "лог проверок");
+      if (pipeline && pipeline.status === "canceled") return out("failed", "bad", "Проверки отменены.", pipeLink, "лог проверок");
+      if (!pipeline) return out("checks", "wait", "Конфиг в GitLab. Ждём запуска проверок.");
+      if (mr.merge_when_pipeline_succeeds || mr.auto_merge_enabled || tracking.mergeRequested)
+        return out("checks", "wait", "Идут проверки. После них изменения сольются сами.", pipeLink, "проверки");
+      if (tracking.mergeBlocked) return out("merging", "wait", tracking.mergeBlocked);
+      return client.autoMerge(tracking.iid).then(function () {
+        tracking.mergeRequested = true;
+        return out("checks", "wait", "Идут проверки. После них изменения сольются сами.", pipeLink, "проверки");
+      }, function (err) {
+        tracking.mergeTries = (tracking.mergeTries || 0) + 1;
+        if (err.status === 401 || err.status === 403 || tracking.mergeTries >= 4) {
+          tracking.mergeBlocked = "Проверки " + (pipeline.status === "success" ? "прошли" : "идут") +
+            ". Слить изменения должен участник с правом слияния: откройте merge request и нажмите Merge.";
+          return out("merging", "wait", tracking.mergeBlocked);
+        }
+        return out("checks", "wait", "Идут проверки.", pipeLink, "проверки");
+      });
+    }
+    var sha = mr.merge_commit_sha || mr.squash_commit_sha || mr.sha;
+    return client.pipelineFor(sha).then(function (main) {
+      if (!main) return out("deploying", "wait", "Изменения слиты. Ждём запуска выкладки.");
+      return client.jobs(main.id).then(function (jobs) {
+        var job = (jobs || []).filter(function (j) { return j.name === cfg.jobs[target]; })[0];
+        if (main.status === "failed" && (!job || RUNNING.indexOf(job.status) >= 0 || job.status === "skipped"))
+          return out("failed", "bad", "Проверки основной ветки не прошли, выкладка не началась.", main.web_url, "лог");
+        if (!job) return out("deploying", "wait", "Изменения слиты. Ждём задания выкладки.", main.web_url, "пайплайн");
+        if (job.status === "success")
+          return out("done", "ok", "Опубликовано на " + place + ". DAG " + tracking.dag + " появится в Airflow через несколько минут.", job.web_url, "лог выкладки");
+        if (job.status === "failed")
+          return out("failed", "bad", target === "prod"
+            ? "Выкладка на боевой инстанс не прошла. Частая причина: у нажавшего нет права публиковать на прод (approvers.txt)."
+            : "Выкладка на тестовый инстанс не прошла.", job.web_url, "лог выкладки");
+        if (job.status === "canceled") return out("failed", "bad", "Выкладка отменена.", job.web_url, "лог выкладки");
+        if (job.status === "manual")
+          return out("approve", "wait", target === "prod"
+            ? "Проверки прошли. Процесс ждёт публикации на боевой инстанс: её запускает участник с правом публикации."
+            : "Проверки прошли. Запустите выкладку на тестовый инстанс.", job.web_url, "задание",
+            {jobId: job.id, label: target === "prod" ? "Опубликовать на боевой инстанс" : "Выложить на тестовый инстанс"});
+        return out("deploying", "wait", "Идёт выкладка на " + place + ".", job.web_url, "лог выкладки");
+      });
+    });
+  });
 }
 </script>
 
@@ -1227,14 +1417,18 @@ function refresh() {
     badge.className = count ? "badge" : "badge ok";
     badge.textContent = count ? count + " " + plural(count, "замечание", "замечания", "замечаний") : "готово";
   });
+  renderSend();
   var name = state.name || "имя_процесса", gl = TEAM.gitlab_new_file_url;
-  document.getElementById("next").innerHTML = [
+  document.getElementById("next").innerHTML = (gitlabConfig() ? [
+    "Конфиг ниже — то, что уйдёт в GitLab. Копировать его не нужно: нажмите «Отправить» в блоке выше.",
+    "Проверки и выкладка пойдут сами, статус виден в том же блоке."
+  ] : [
     "Нажмите «Скопировать».",
     gl ? 'Откройте <a href="' + esc(gl.replace("{name}", encodeURIComponent(name))) + '" target="_blank" rel="noopener">новый файл в GitLab</a> и вставьте конфиг.'
        : "В GitLab, в репозитории scoring-pipelines, создайте файл <code>pipelines/" + esc(name) + "/pipeline.yaml</code> и вставьте конфиг.",
     "Сохраните в новую ветку и создайте merge request — проверки запустятся сами.",
     "После одобрения нажмите «deploy-test» в разделе CI/CD → Pipelines."
-  ].map(function (x) { return "<li>" + x + "</li>"; }).join("");
+  ]).map(function (x) { return "<li>" + x + "</li>"; }).join("");
   save();
 }
 
@@ -1352,6 +1546,126 @@ document.getElementById("import-ok").addEventListener("click", function () {
   } catch (e) { err.textContent = "Не получилось: " + e.message; err.hidden = false; }
 });
 document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden) overlay.hidden = true; });
+
+
+// ---------------------------------------------------------------- отправка в GitLab
+var GL = gitlabConfig(), TOKEN_KEY = "scoring-constructor-gitlab-token", pollTimer = null;
+var el = function (id) { return document.getElementById(id); };
+
+function token() { return el("gl-token").value.trim(); }
+function client() { return gitlabClient(GL, token(), function (url, options) { return fetch(url, options); }); }
+function stageHint() {
+  if (state.replaces) return "Заменяющий процесс сначала идёт в тень: теневой DAG пишет в таблицы с суффиксом _shadow, и скоры можно сверить с боевыми.";
+  return state.stage === "prod"
+    ? "Процесс попадёт на боевой инстанс после проверок и публикации участником с правом на это."
+    : "На тестовый инстанс уйдёт теневая версия: DAG с суффиксом _shadow пишет в таблицы _shadow. Боевые данные не затрагиваются.";
+}
+function renderSend() {
+  if (state.replaces) state.stage = "test";
+  el("send-stage").value = state.stage;
+  el("send-stage").querySelector('option[value="prod"]').disabled = !!state.replaces;
+  el("send-replaces").checked = !!state.replaces;
+  el("send-stage-hint").textContent = stageHint();
+  el("send-off").hidden = !!GL;
+  el("send-on").hidden = !GL;
+  if (!GL) return;
+  var problems = validate(state).length, busy = state.tracking && ["done", "failed"].indexOf(state.tracking.phase) < 0;
+  el("send-go").disabled = !!problems || !token() || !!busy;
+  el("send-go").textContent = state.stage === "prod" ? "Отправить на прод" : "Отправить на тест";
+  el("send-hint").textContent = problems ? "Сначала исправьте замечания в блоке «Проверка»: " + problems + "."
+    : !token() ? "Введите токен GitLab." : busy ? "Этот процесс уже отправлен, идёт выкладка."
+    : state.folder ? "Изменится процесс из папки pipelines/" + state.folder + "." : "Будет создан новый процесс pipelines/" + (state.name || "…") + ".";
+  var t = state.tracking;
+  el("send-status").hidden = !t;
+  if (t) {
+    el("send-text").textContent = t.text || "Отправлено. Узнаём статус…";
+    el("send-text").className = "send-state " + (t.tone || "wait");
+    el("send-link").href = t.link || t.url; el("send-link").textContent = "Открыть " + (t.linkText || "merge request");
+    el("send-action").hidden = !t.action;
+    if (t.action) el("send-action").textContent = t.action.label;
+  }
+}
+function poll() {
+  var t = state.tracking;
+  if (!t || !t.iid || !token()) return;
+  trackStatus(client(), GL, t).then(function (status) {
+    if (state.tracking !== t) return;
+    t.phase = status.phase; t.tone = status.tone; t.text = status.text; t.link = status.link; t.linkText = status.linkText; t.action = status.action;
+    save(); renderSend();
+    if (status.phase === "done" || status.phase === "failed") stopPolling();
+  }, function (err) {
+    if (state.tracking !== t) return;
+    t.text = "Не удалось узнать статус. " + err.message; t.tone = "bad"; renderSend();
+  });
+}
+function startPolling() { stopPolling(); poll(); pollTimer = setInterval(poll, 10000); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+el("send-stage").addEventListener("change", function () { state.stage = this.value; refresh(); });
+el("send-replaces").addEventListener("change", function () { state.replaces = this.checked; refresh(); });
+el("gl-token").addEventListener("input", function () {
+  try { localStorage.setItem(TOKEN_KEY, token()); } catch (e) {}
+  renderSend();
+});
+el("gl-check").addEventListener("click", function () {
+  var info = el("gl-user");
+  if (!token()) { info.textContent = "Сначала введите токен."; return; }
+  info.textContent = "Проверяю…";
+  var c = client();
+  c.whoami().then(function (user) {
+    return c.listPipelines().then(function (names) {
+      info.textContent = "Вы вошли как " + user.username + ". Процессов в репозитории: " + names.length + ".";
+      el("gl-existing").innerHTML = names.map(function (n) { return "<option>" + esc(n) + "</option>"; }).join("");
+      el("gl-open-row").hidden = !names.length;
+    });
+  }).catch(function (err) { info.textContent = err.message; });
+});
+el("gl-open").addEventListener("click", function () {
+  var name = el("gl-existing").value, info = el("gl-user");
+  if (!name) return;
+  client().getFile("pipelines/" + name + "/pipeline.yaml").then(function (text) {
+    if (text === null) throw new Error("В папке " + name + " нет pipeline.yaml.");
+    if (typeof jsyaml === "undefined") throw new Error("Не загрузилась библиотека чтения YAML: нужен доступ к cdnjs.cloudflare.com.");
+    var cfg = jsyaml.load(text, {schema: jsyaml.CORE_SCHEMA});
+    var keepTracking = state.tracking;
+    state = fromConfig(cfg); state.tracking = keepTracking; state.folder = name;
+    info.textContent = "Открыт процесс " + name + ". Поправьте форму и отправьте.";
+    renderForm();
+  }).catch(function (err) { info.textContent = err.message; });
+});
+el("send-go").addEventListener("click", function () {
+  if (validate(state).length || !token()) return;
+  var button = this, target = state.stage === "prod" ? "prod" : "test", name = state.name;
+  var now = new Date(), stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  button.disabled = true; el("send-hint").textContent = "Отправляю в GitLab…";
+  client().whoami().then(function (user) {
+    var title = (target === "prod" ? "На прод: " : "На тест: ") + name;
+    return client().submit({name: name, folder: state.folder, yaml: buildYaml(state), stamp: stamp, title: title,
+      description: "Отправлено из конструктора скоринга пользователем " + user.username + ".\n\n" +
+        (target === "prod" ? "Процесс публикуется на боевой инстанс." : "Процесс идёт в тень: на тестовый инстанс уходит версия с суффиксом _shadow.")});
+  }).then(function (mr) {
+    state.tracking = {iid: mr.iid, url: mr.url, name: name, target: target, dag: name + (target === "test" ? "_shadow" : ""),
+      phase: "checks", tone: "wait", text: "Конфиг в GitLab, merge request создан. Ждём проверок."};
+    el("send-hint").textContent = "";
+    save(); renderSend(); startPolling();
+  }).catch(function (err) { button.disabled = false; renderSend(); el("send-hint").textContent = err.message; });
+});
+el("send-action").addEventListener("click", function () {
+  var t = state.tracking;
+  if (!t || !t.action) return;
+  this.disabled = true;
+  var button = this;
+  client().play(t.action.jobId).then(function () {
+    t.action = null; t.text = "Выкладка запущена."; button.disabled = false; renderSend(); startPolling();
+  }, function (err) {
+    button.disabled = false;
+    t.text = (err.status === 403 || err.status === 401 ? "У вас нет права запускать это задание. " : "") + err.message; t.tone = "bad"; renderSend();
+  });
+});
+el("send-clear").addEventListener("click", function () { stopPolling(); state.tracking = null; save(); renderSend(); });
+
+try { el("gl-token").value = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
+if (GL && state.tracking && state.tracking.iid && ["done", "failed"].indexOf(state.tracking.phase) < 0) startPolling();
 
 renderForm();
 </script>

@@ -79,6 +79,18 @@ def _cmd_constructor(args) -> int:
     return 0
 
 
+def _cmd_check_approver(args) -> int:
+    from scoring_kit.publish import check_approver
+
+    try:
+        check_approver(Path(args.root), args.user)
+    except PipelineError as e:
+        print(f"Ошибка: {e}", file=sys.stderr)
+        return 1
+    print(f"{args.user}: публикация на боевой инстанс разрешена")
+    return 0
+
+
 def _cmd_publish(args) -> int:
     from scoring_kit.publish import publish
 
@@ -255,6 +267,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pipelines", nargs="*", default=[], help="папки работающих процессов: их образы попадут в списки")
     p.add_argument("-o", "--out", default="constructor.html")
     p.set_defaults(func=_cmd_constructor)
+
+    p = sub.add_parser("check-approver", help="проверить, что пользователю разрешено публиковать на прод (approvers.txt)")
+    p.add_argument("--user", required=True, help="логин; в GitLab CI это $GITLAB_USER_LOGIN")
+    p.add_argument("--root", default=".")
+    p.set_defaults(func=_cmd_check_approver)
 
     p = sub.add_parser("schema", help="JSON Schema для подсказок в редакторе")
     p.add_argument("-o", "--out", default="pipeline.schema.json")

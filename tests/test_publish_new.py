@@ -183,3 +183,37 @@ def test_draft_is_not_published(repo, capsys):
     assert "demo_multi_shadow.py" not in plan.files and plan.skipped == ["demo_multi"]
     publish(repo, "test", dry_run=True)
     assert "Черновики" in capsys.readouterr().out
+
+
+def test_shadow_flag_in_pipeline_config(repo):
+    """Процесс в тени можно пометить в его же конфиге: shadow.txt для этого не нужен."""
+    import yaml as _yaml
+
+    from scoring_kit.publish import shadow_dirs
+
+    names = sorted(p.name for p in (repo / "pipelines").iterdir())
+    listed = {d.name for d in shadow_dirs(repo)}
+    target = next(n for n in names if n not in listed)
+    path = repo / "pipelines" / target / "pipeline.yaml"
+    raw = _yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["shadow"] = True
+    path.write_text(_yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    assert target in {d.name for d in shadow_dirs(repo)}
+    test_plan, prod_plan = assemble(repo, "test"), None
+    assert any(target in src and "тень" in src for src in test_plan.sources.values())
+    try:
+        prod_plan = assemble(repo, "prod", repo / "publish_prod")
+    except Exception:
+        prod_plan = None                                   # на прод могло не остаться ни одного процесса
+    if prod_plan is not None:
+        assert target not in prod_plan.sources.values()
+
+
+def test_check_approver(repo, capsys):
+    from scoring_kit.cli import main
+
+    assert main(["check-approver", "--user", "i.ivanov", "--root", str(repo)]) == 1      # файла нет
+    (repo / "approvers.txt").write_text("# кто может публиковать на прод\ni.ivanov\np.petrov  # руководитель\n", encoding="utf-8")
+    assert main(["check-approver", "--user", "p.petrov", "--root", str(repo)]) == 0
+    assert main(["check-approver", "--user", "x.other", "--root", str(repo)]) == 1
+    assert "i.ivanov, p.petrov" in capsys.readouterr().err

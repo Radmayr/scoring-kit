@@ -44,10 +44,10 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.6.0"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.7.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.6.0`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.7.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Конструктор: процесс без программирования
@@ -69,6 +69,33 @@ scoring constructor --presets presets.yaml --pipelines pipelines/*/ -o construct
 файла в GitLab (формат — в `scoring_kit/constructor.py`). `--pipelines` добавляет в списки образы
 работающих процессов. Готовый файл открывается в браузере или выкладывается на GitLab Pages.
 Логика формы покрыта тестом: каждый пример, открытый в конструкторе, сохраняется идентично.
+
+### Кнопки: от формы до инстанса без терминала
+
+Если в пресетах задан блок `gitlab` (адрес GitLab и проект с процессами), в конструкторе появляется
+блок «Отправить на инстанс». Человек вводит свой личный токен GitLab (право `api`, хранится только в
+его браузере) и нажимает кнопку. Дальше всё идёт само:
+
+| Шаг | Кто делает |
+|---|---|
+| ветка, файл `pipelines/<имя>/pipeline.yaml`, merge request | конструктор, через GitLab API |
+| проверка конфига и сборка DAG'ов | CI, задание `check-pipelines` |
+| слияние в основную ветку после зелёных проверок | GitLab (автослияние включает конструктор) |
+| выкладка на тестовый инстанс | CI, задание `deploy-test`, автоматически |
+| выкладка на боевой инстанс | CI, задание `deploy-prod`: кнопка в конструкторе, только для логинов из `approvers.txt` |
+
+Статус виден в том же блоке: идут проверки, слито, идёт выкладка, опубликовано или что сломалось и
+где лог. Существующий процесс открывается кнопкой «Открыть из GitLab», правится и отправляется так же.
+
+Куда уходит процесс, решает поле `shadow` в его конфиге:
+- «Сначала на тест» ставит `shadow: true`: на тестовый инстанс уходит теневая версия (`_shadow`),
+  на боевой процесс не публикуется;
+- «Сразу на боевой инстанс» убирает `shadow`. Для процесса, который заменяет существующий, этот
+  путь в форме закрыт: сначала тень и сверка.
+
+Перевод с теста на прод — это тот же процесс, отправленный с выбором «на боевой инстанс».
+
+Логика кнопок покрыта тестом на имитации GitLab API (`tests/gitlab_flow.js`).
 
 ## Процесс
 
@@ -278,7 +305,7 @@ scoring publish --env test --dry-run  # только собрать папку p
 
 | | test | prod |
 |---|---|---|
-| процессы | теневые версии тех, что в `shadow.txt` | боевые версии всех, кроме тех, что в `shadow.txt` |
+| процессы | теневые версии тех, у кого `shadow: true` (или кто в `shadow.txt`) | боевые версии всех, кроме теневых (`shadow: true` / `shadow.txt` |
 | ручные DAG'и | `dags_manual/test/` (или `dags_manual/*.py`) | `dags_manual/prod/` |
 | черновики (`draft: true`) | не публикуются | не публикуются |
 
@@ -294,7 +321,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 
 Критерий приёмки: `only_in_prod = only_in_shadow = 0`, `n_diff_over_tol = 0`, `n_null_mismatch = 0`.
 
-Переключение: поставить старый DAG на паузу → убрать процесс из `shadow.txt` →
+Переключение: поставить старый DAG на паузу → убрать у процесса `shadow: true` →
 `scoring publish --env prod` → вручную запустить и проверить → старый держать на паузе неделю
 (откат = снять паузу).
 
@@ -339,6 +366,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 | `scoring new DIR [--recipe R] [--custom-predictor]` | заготовка процесса: single_model, multi_model, fit_apply, dlh |
 | `scoring validate DIR...` | проверка конфига и predictor.py (для CI) |
 | `scoring publish --env test\|prod [--dry-run] [--yes]` | собрать полный набор для инстанса и опубликовать |
+| `scoring check-approver --user LOGIN` | право публиковать на боевой инстанс (`approvers.txt`); вызывается в CI перед выкладкой на прод |
 | `scoring schema [-o pipeline.schema.json]` | схема для подсказок в редакторе |
 | `scoring render DIR... [-o build/dags] [--shadow]` | генерация DAG-файлов |
 | `scoring debug DIR --data F --model M [--limit N]` | локальный прогон |
@@ -383,7 +411,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.6.0`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.7.0`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
 (`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 

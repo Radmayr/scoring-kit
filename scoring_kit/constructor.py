@@ -33,7 +33,7 @@ def load_presets(path: Union[str, Path]) -> dict:
 
 def check_presets(presets: dict) -> dict:
     """Проверяет и нормализует пресеты: gp_service, gitlab_new_file_url, domains, images."""
-    allowed = {"gp_service", "gitlab_new_file_url", "domains", "images"}
+    allowed = {"gp_service", "gitlab_new_file_url", "gitlab", "domains", "images"}
     extra = set(presets) - allowed
     if extra:
         raise PresetsError(f"неизвестные поля пресетов: {sorted(extra)}; есть {sorted(allowed)}")
@@ -52,8 +52,28 @@ def check_presets(presets: dict) -> dict:
     return {
         "gp_service": str(presets.get("gp_service") or ""),
         "gitlab_new_file_url": str(presets.get("gitlab_new_file_url") or ""),
+        "gitlab": _gitlab(presets.get("gitlab")),
         "domains": [str(d) for d in presets.get("domains") or []],
         "images": images,
+    }
+
+
+def _gitlab(raw) -> dict:
+    """Куда конструктор отправляет процессы: адрес GitLab, проект с процессами, основная ветка, имена заданий выкладки."""
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise PresetsError("gitlab: ожидается словарь {url, project, branch}")
+    extra = set(raw) - {"url", "project", "branch", "jobs"}
+    if extra:
+        raise PresetsError(f"gitlab: неизвестные поля {sorted(extra)}; есть url, project, branch, jobs")
+    if bool(raw.get("url")) != bool(raw.get("project")):
+        raise PresetsError("gitlab: нужны оба поля — url (адрес GitLab) и project (группа/проект с процессами)")
+    jobs = raw.get("jobs") or {}
+    return {
+        "url": str(raw.get("url") or "").rstrip("/"),
+        "project": str(raw.get("project") or ""),
+        "branch": str(raw.get("branch") or "main"),
+        "jobs": {"test": str(jobs.get("test") or "deploy-test"), "prod": str(jobs.get("prod") or "deploy-prod")},
     }
 
 
