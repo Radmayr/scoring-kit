@@ -182,8 +182,9 @@ details.help pre.yaml { background: var(--surface); max-height: none; }
 .send-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
 .send-row select { flex: 1 1 160px; }
 .send-row[hidden] { display: none; }
-#send-on { display: grid; gap: 10px; }
-#send-on[hidden] { display: none; }
+#send-on, #gl-auth { display: grid; gap: 10px; }
+#gl-auth[hidden] { display: none; }
+.demo-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); font-size: 13.5px; }
 #send-status { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
 #send-status[hidden] { display: none; }
 .send-state { font-size: 14px; font-weight: 500; }
@@ -225,8 +226,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
           <small id="send-stage-hint"></small>
         </label>
         <label class="check"><input type="checkbox" id="send-replaces"> <span>Процесс заменяет существующий или пишет в уже используемую таблицу</span></label>
-        <p class="hint" id="send-off" hidden>Отправка в GitLab включается в сборке конструктора для команды. В этой версии конфиг можно скопировать ниже.</p>
-        <div id="send-on" hidden>
+        <p class="demo-note" id="send-off" hidden>Это демо-версия: кнопка ниже показывает, как пойдёт отправка, но ничего никуда не отправляет. В сборке для команды она работает с вашим GitLab.</p>
+        <div id="send-on">
+          <div id="gl-auth">
           <label class="field"><span>Личный токен GitLab</span>
             <input type="password" id="gl-token" autocomplete="off" placeholder="glpat-…">
             <small>Создаётся в GitLab: аватар → Preferences → Access tokens, право <code>api</code>. Хранится только в этом браузере.</small>
@@ -238,6 +240,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
           <div class="send-row" id="gl-open-row" hidden>
             <select id="gl-existing" aria-label="Процесс из GitLab"></select>
             <button type="button" class="small" id="gl-open">Открыть из GitLab</button>
+          </div>
           </div>
           <div class="send-row">
             <button type="button" class="primary" id="send-go">Отправить</button>
@@ -1698,20 +1701,21 @@ function renderSend() {
   el("send-replaces").checked = !!state.replaces;
   el("send-stage-hint").textContent = stageHint();
   el("send-off").hidden = !!GL;
-  el("send-on").hidden = !GL;
-  if (!GL) return;
+  el("gl-auth").hidden = !GL;
   var problems = validate(state).length, busy = state.tracking && ["done", "failed"].indexOf(state.tracking.phase) < 0;
-  el("send-go").disabled = !!problems || !token() || !!busy;
-  el("send-go").textContent = state.stage === "prod" ? "Отправить на прод" : "Отправить на тест";
+  var needToken = !!GL && !token();
+  el("send-go").disabled = !!problems || needToken || !!busy;
+  el("send-go").textContent = (state.stage === "prod" ? "Отправить на прод" : "Отправить на тест") + (GL ? "" : " (демо)");
   el("send-hint").textContent = problems ? "Сначала исправьте замечания в блоке «Проверка»: " + problems + "."
-    : !token() ? "Введите токен GitLab." : busy ? "Этот процесс уже отправлен, идёт выкладка."
+    : needToken ? "Введите токен GitLab." : busy ? "Этот процесс уже отправлен, идёт выкладка."
     : state.folder ? "Изменится процесс из папки pipelines/" + state.folder + "." : "Будет создан новый процесс pipelines/" + (state.name || "…") + ".";
   var t = state.tracking;
   el("send-status").hidden = !t;
   if (t) {
     el("send-text").textContent = t.text || "Отправлено. Узнаём статус…";
     el("send-text").className = "send-state " + (t.tone || "wait");
-    el("send-link").href = t.link || t.url; el("send-link").textContent = "Открыть " + (t.linkText || "merge request");
+    el("send-link").hidden = !!t.demo;
+    el("send-link").href = t.link || t.url || "#"; el("send-link").textContent = "Открыть " + (t.linkText || "merge request");
     el("send-action").hidden = !t.action;
     if (t.action) el("send-action").textContent = t.action.label;
   }
@@ -1764,7 +1768,36 @@ el("gl-open").addEventListener("click", function () {
     renderForm();
   }).catch(function (err) { info.textContent = err.message; });
 });
+// Демонстрация: те же сообщения, что покажет настоящая отправка, по таймеру. Ничего не отправляется.
+var demoTimer = null;
+function demoStep(index) {
+  var t = state.tracking;
+  if (!t || !t.demo) return;
+  var prod = t.target === "prod", place = prod ? "боевой инстанс" : "тестовый инстанс";
+  var steps = [
+    ["checks", "wait", "Демо. Конфиг в GitLab, merge request создан. Ждём проверок."],
+    ["checks", "wait", "Демо. Идут проверки. После них изменения сольются сами."],
+    ["deploying", "wait", "Демо. Изменения слиты. Ждём запуска выкладки."]
+  ].concat(prod
+    ? [["approve", "wait", "Демо. Проверки прошли. Процесс ждёт публикации на боевой инстанс: её запускает участник с правом публикации."]]
+    : [["deploying", "wait", "Демо. Идёт выкладка на тестовый инстанс."]]);
+  steps.push(["done", "ok", "Демо. Опубликовано на " + place + ". DAG " + t.dag + " появился бы в Airflow через несколько минут."]);
+  var step = steps[Math.min(index, steps.length - 1)];
+  t.phase = step[0]; t.tone = step[1]; t.text = step[2]; t.demoIndex = index;
+  t.action = step[0] === "approve" ? {label: "Опубликовать на боевой инстанс"} : null;
+  renderSend(); renderRail(validate(state));
+  clearTimeout(demoTimer);
+  if (step[0] !== "done" && step[0] !== "approve") demoTimer = setTimeout(function () { demoStep(index + 1); }, 2200);
+}
+
 el("send-go").addEventListener("click", function () {
+  if (!GL) {
+    if (validate(state).length) return;
+    var demoTarget = state.stage === "prod" ? "prod" : "test";
+    state.tracking = {demo: true, name: state.name, target: demoTarget, dag: state.name + (demoTarget === "test" ? "_shadow" : "")};
+    demoStep(0);
+    return;
+  }
   if (validate(state).length || !token()) return;
   var button = this, target = state.stage === "prod" ? "prod" : "test", name = state.name;
   var now = new Date(), stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
@@ -1784,6 +1817,7 @@ el("send-go").addEventListener("click", function () {
 el("send-action").addEventListener("click", function () {
   var t = state.tracking;
   if (!t || !t.action) return;
+  if (t.demo) { demoStep((t.demoIndex || 0) + 1); return; }
   this.disabled = true;
   var button = this;
   client().play(t.action.jobId).then(function () {
@@ -1793,11 +1827,14 @@ el("send-action").addEventListener("click", function () {
     t.text = (err.status === 403 || err.status === 401 ? "У вас нет права запускать это задание. " : "") + err.message; t.tone = "bad"; renderSend();
   });
 });
-el("send-clear").addEventListener("click", function () { stopPolling(); state.tracking = null; save(); renderSend(); });
+el("send-clear").addEventListener("click", function () {
+  stopPolling(); clearTimeout(demoTimer); state.tracking = null; save(); renderSend(); renderRail(validate(state));
+});
 
 try { el("gl-token").value = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
-el("config-box").open = !GL;
+el("config-box").open = false;
 if (GL && state.tracking && state.tracking.iid && ["done", "failed"].indexOf(state.tracking.phase) < 0) startPolling();
+if (state.tracking && state.tracking.demo && state.tracking.phase !== "done") state.tracking = null;   // незавершённую демонстрацию не продолжаем
 
 renderForm();
 </script>
