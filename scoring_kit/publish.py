@@ -12,6 +12,9 @@ mlc публикует папку целиком и удаляет с инста
 
     test: {instance: collection-models-test, project: collectionanalytics}
     prod: {instance: collection-models-prod, project: collectionanalytics}
+
+Опциональное поле `endpoint` задаёт mlcore API endpoint для окружения; если указано,
+оно передаётся в mlc как `--endpoint`. Иначе mlc использует свой дефолтный (dev) endpoint.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ class Plan:
     instance: str
     project: str
     out: Path
+    endpoint: Optional[str] = None  # mlcore API endpoint; если задан, передаётся в mlc --endpoint
     files: list[str] = field(default_factory=list)  # имена файлов в out/dags
     sources: dict[str, str] = field(default_factory=dict)  # файл -> откуда взят
     skipped: list[str] = field(default_factory=list)  # черновики, которые не публикуются
@@ -95,7 +99,7 @@ def assemble(root: Path, env: str, out: Optional[Path] = None) -> Plan:
         raise PipelineError(f"{ENVIRONMENTS_FILE}: нет окружения '{env}' (есть: {', '.join(environments)})")
     cfg = environments[env]
     out = (out or root / "publish").resolve()
-    plan = Plan(env=env, instance=cfg["instance"], project=cfg["project"], out=out)
+    plan = Plan(env=env, instance=cfg["instance"], project=cfg["project"], out=out, endpoint=cfg.get("endpoint"))
 
     shadow = shadow_dirs(root)
     if env == "test":
@@ -166,6 +170,8 @@ def publish(
         return plan
 
     base = ["mlc", "airflow", "publish", plan.instance, "-p", plan.project, "-i", str(plan.out)]
+    if plan.endpoint:
+        base += ["--endpoint", plan.endpoint]
     if run(base + ["--check"]) != 0:
         raise PipelineError("mlc --check завершился с ошибкой — публикация отменена")
     if not yes:
