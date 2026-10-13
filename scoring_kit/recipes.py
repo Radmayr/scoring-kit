@@ -64,6 +64,33 @@ def single_model(b: DagBuilder, p: Pipeline, predictor_source: Optional[str]) ->
     _write_all(b, p, infer)
 
 
+def _dlh_output_type(sql_type: str) -> str:
+    """Тип колонки приёмника -> тип выходной колонки оператора DLH (выражение для DAG'а)."""
+    text = sql_type.lower().strip()
+    base, _, args = text.partition("(")
+    base = base.strip()
+    if base in ("int", "integer", "int4"):
+        return "OutputType.INT"
+    if base in ("bigint", "int8"):
+        return "OutputType.LONG"
+    if base in ("smallint", "int2"):
+        return "OutputType.SHORT"
+    if base in ("numeric", "decimal"):
+        parts = [x.strip() for x in args.rstrip(")").split(",") if x.strip()]
+        if len(parts) == 2 and all(x.isdigit() for x in parts):
+            return f"OutputType.decimal({parts[0]}, {parts[1]})"
+        return "OutputType.DOUBLE"
+    if base in ("float", "float4", "float8", "double precision", "double", "real"):
+        return "OutputType.DOUBLE"
+    if base == "date":
+        return "OutputType.DATE"
+    if base.startswith("timestamp"):
+        return "OutputType.TIMESTAMP"
+    if base in ("bool", "boolean"):
+        return "OutputType.BOOL"
+    return "OutputType.STRING"
+
+
 def _single_model_dlh(b: DagBuilder, p: Pipeline) -> None:
     m, sink, dlh = p.model, p.sinks[0], p.dlh
     first = _start(b, p, blocks.dlh_sensor)
@@ -100,9 +127,13 @@ def _single_model_dlh(b: DagBuilder, p: Pipeline) -> None:
         b.edge(prev, check_src)
 
     # Всё, что пишется, кроме скора, оператор переносит из входа «как есть» (key_columns).
-    key_columns = [c for c in sink.columns if c != m.score_column]
+    # ...а скор и признаки после обработки (model.output_columns) берёт из ответа модели.
+    from_model = [m.score_column, *m.output_columns]
+    key_columns = [c for c in sink.columns if c not in from_model]
+    outputs = {m.score_column: "OutputType.DOUBLE"}      # без явного типа оператор пишет float32
+    outputs.update({c: _dlh_output_type(sink.columns[c]) for c in m.output_columns})
     infer = blocks.dlh_infer(
-        b, INFERENCE_TASK, key_columns, m.score_column, m.mrid[0], source_table, sink.table,
+        b, INFERENCE_TASK, key_columns, outputs, m.mrid[0], source_table, sink.table,
         dlh.image, dlh.max_executors, dlh.max_wait_seconds,
     )
     b.edge(check_src, infer)

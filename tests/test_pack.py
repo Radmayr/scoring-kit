@@ -349,6 +349,8 @@ def test_example_script_and_pipeline(tmp_path):
     assert "совпадает с исходной моделью" in res.stdout
     obj = load_packed(tmp_path / "model_packed.pkl")
     assert obj.features == ["debt_amt", "dpd_days", "product_cd"]
+    assert "можно писать в витрину (после обработки): " in obj.describe() and "debt_log" in obj.describe()
+    assert load_pipeline(example).model.output_columns == ["debt_log", "dpd_days"]
     rng = np.random.default_rng(5)
     data = pd.DataFrame({"client_id": np.arange(300), "report_dt": "2026-09-01", "debt_amt": rng.gamma(2.0, 20000.0, 300),
                          "dpd_days": rng.integers(0, 120, 300).astype(float), "product_cd": rng.choice(["CC", "CL", "MT"], 300)})
@@ -356,3 +358,104 @@ def test_example_script_and_pipeline(tmp_path):
     data.to_csv(csv, index=False)
     result = run_debug(example, csv, [str(tmp_path / "model_packed.pkl")], tmp_path / "out")
     np.testing.assert_allclose(result.scored["score"], obj.predict(pd.read_csv(csv))["score"], rtol=0, atol=1e-12)
+    written = result.to_write[load_pipeline(example).sinks[0].table]
+    assert list(written.columns) == ["client_id", "report_dt", "score", "debt_log", "dpd_days"]
+    assert (written["dpd_days"].astype(float) >= -1).all() and written["dpd_days"].notna().all()     # после fillna(-1)
+
+
+# ---------------------------------------------------------------- признаки после обработки в витрине
+
+
+def with_outputs(columns, extra_sink):
+    def edit(raw):
+        as_packed(raw["model"])
+        raw["model"]["output_columns"] = list(columns)
+        raw["sinks"][0]["columns"].update(extra_sink)
+    return edit
+
+
+def test_gp_writes_transformed_features(tmp_path, packed):
+    """В витрину идут признаки после обработки: созданный (debt_log) и изменённый на месте (bal_filled)."""
+    model, _, path = packed
+    d = write_pipeline(tmp_path, DEMO, with_outputs(["debt_log", "bal_filled"], {"debt_log": "numeric", "bal_filled": "numeric(18,4)"}))
+    data = make_frame(1200, seed=61)
+    csv = tmp_path / "data.csv"
+    data.to_csv(csv, index=False)
+    result = run_debug(d, csv, [str(path)], tmp_path / "out")
+    back = pd.read_csv(csv)
+    written = result.to_write[load_pipeline(d).sinks[0].table]
+    np.testing.assert_allclose(written["debt_log"].astype(float), np.log1p(back["debt_sum"]), rtol=0, atol=1e-12)
+    np.testing.assert_allclose(written["bal_filled"].astype(float), back["bal_avg_3m"].fillna(-1.0), rtol=1e-12)
+    np.testing.assert_allclose(result.scored["score"].to_numpy(), expected_scores(model, back), rtol=0, atol=1e-12)
+
+
+def test_dlh_writes_transformed_features(tmp_path, packed):
+    model, _, path = packed
+    d = write_pipeline(tmp_path, DLH, with_outputs(["debt_log"], {"debt_log": "numeric(18,6)"}))
+    p = load_pipeline(d)
+    data = make_frame(900, seed=62)
+    csv = tmp_path / "data.csv"
+    data.to_csv(csv, index=False)
+    result = run_debug(d, csv, [str(path)], tmp_path / "out")
+    back = pd.read_csv(csv)
+    np.testing.assert_allclose(result.scored["debt_log"].astype(float), np.log1p(back["debt_sum"]), rtol=0, atol=1e-12)
+    from scoring_kit.render import render_dir
+
+    code = render_dir(d)[1]
+    assert "output_columns=['score', 'debt_log']" in code
+    assert "'debt_log': OutputType.decimal(18, 6)" in code and "'score': OutputType.DOUBLE" in code
+    assert "debt_log" not in code.split("key_columns=")[1].split("]")[0]      # берётся из модели, а не из источника
+    assert set(p.sinks[0].columns) >= {"debt_log", "score"}
+
+
+def test_output_column_must_exist_in_model_and_sink(tmp_path, packed):
+    _, _, path = packed
+    with pytest.raises(PipelineError, match="нет колонок модели"):
+        load_pipeline(write_pipeline(tmp_path / "a", DEMO, with_outputs(["debt_log"], {})))
+    d = write_pipeline(tmp_path / "b", DEMO, with_outputs(["no_such"], {"no_such": "numeric"}))
+    data = make_frame(100, seed=63)
+    csv = tmp_path / "data.csv"
+    data.to_csv(csv, index=False)
+    with pytest.raises(Exception, match="не возвращает колонки"):
+        run_debug(d, csv, [str(path)], tmp_path / "out")
+
+
+def test_multi_model_outputs_do_not_leak_between_models(tmp_path):
+    """Первая модель меняет колонку на месте и отдаёт её в витрину; вторая должна получить исходное значение."""
+    def scale(df):
+        df["dpd_sum_12m"] = df["dpd_sum_12m"] / 100.0
+        return df
+
+    def plain(df):
+        return df
+
+    features = ["dpd_sum_12m", "debt_sum"]
+    sample = make_frame(300, seed=64)
+    models, paths = [], []
+    for i, func in enumerate((scale, plain)):
+        model = train(features, [], seed=i, func=func)
+        path = tmp_path / f"m{i}.pkl"
+        pack_model(model, features, [], func, sample=sample, num_dtype="float32", path=path, verbose=False)
+        models.append((model, func))
+        paths.append(str(path))
+
+    def edit(raw):
+        raw["model_defaults"] = {k: v for k, v in raw["model_defaults"].items() if k in ("image", "requirements", "flavor")}
+        raw["models"] = [as_packed(m) for m in raw["models"][:2]]
+        raw["models"][0]["output_columns"] = ["dpd_sum_12m"]
+        keep = {raw["models"][0]["score_column"], raw["models"][1]["score_column"]}
+        columns = {k: v for k, v in raw["sinks"][0]["columns"].items() if not k.startswith("score") or k in keep}
+        columns["dpd_sum_12m"] = "numeric"
+        raw["sinks"][0]["columns"] = columns
+
+    d = write_pipeline(tmp_path, MULTI, edit)
+    p = load_pipeline(d)
+    data = make_frame(800, seed=65)
+    csv = tmp_path / "data.csv"
+    data.to_csv(csv, index=False)
+    result = run_debug(d, csv, paths, tmp_path / "out")
+    back = pd.read_csv(csv)
+    for m, (model, func) in zip(p.models, models):
+        np.testing.assert_allclose(
+            result.scored[m.score_column].to_numpy(), expected_scores(model, back, features, [], func), rtol=0, atol=1e-12)
+    np.testing.assert_allclose(result.scored["dpd_sum_12m"].astype(float), back["dpd_sum_12m"] / 100.0, rtol=0, atol=1e-12)

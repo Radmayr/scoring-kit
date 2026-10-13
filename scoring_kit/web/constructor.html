@@ -423,7 +423,7 @@ function defaultState() {
     alerts: "", wait: "", size: "medium", flavors: {},
     source: {mode: "query", query: "", table: "", key: "", minRows: 1, staging: ""},
     model: {mrid: "", image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", custom: false,
-      packed: true, checkRange: true, scoreColumn: "score", features: "", cats: [], float32: true},
+      packed: true, checkRange: true, scoreColumn: "score", outputs: "", features: "", cats: [], float32: true},
     multi: {image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", float32: true,
       models: [newModel(), newModel()]},
     calib: {devQuery: "", applyQuery: "", applyKey: "", score: "", target: "", output: "", method: "isotonic",
@@ -436,7 +436,7 @@ function defaultState() {
     keep: {}
   };
 }
-function newModel() { return {name: "", mrid: "", score: "", packed: true, features: "", cats: [], keep: {}}; }
+function newModel() { return {name: "", mrid: "", score: "", packed: true, outputs: "", features: "", cats: [], keep: {}}; }
 // Упакованная модель (scoring_kit.pack_model): обработка, фичи и типы лежат в объекте из реестра.
 function isPacked(m) { return !!m.packed && !m.custom; }
 
@@ -508,7 +508,15 @@ function scoreColumns(st) {
   if (st.recipe === "multi") return st.multi.models.map(function (m) { return m.score; }).filter(Boolean);
   return [st.model.scoreColumn || "score"];
 }
-function requiredColumns(st) { return uniq(keyOf(st).concat(scoreColumns(st))); }
+// Признаки после обработки, которые упакованная модель отдаёт в витрину (model.output_columns).
+function modelOutputs(st) {
+  if (st.recipe === "calib") return [];
+  if (st.recipe === "multi") {
+    return st.multi.models.reduce(function (all, m) { return all.concat(isPacked(m) ? words(m.outputs) : []); }, []);
+  }
+  return isPacked(st.model) ? words(st.model.outputs) : [];
+}
+function requiredColumns(st) { return uniq(keyOf(st).concat(scoreColumns(st), modelOutputs(st))); }
 // Итоговые колонки: сохранённые (введённые или из исходного конфига) + недостающие обязательные в конце.
 function sinkColumns(st) {
   var cols = st.sink.columns.map(function (c, i) { return {name: c.name, type: c.type, index: i}; });
@@ -750,7 +758,8 @@ function buildYaml(st) {
           kept("model_defaults", 2)).join("\n"));
       out.push("models:\n" + mm.models.map(function (m) {
         var f = words(m.features), head = ["  - name: " + q(m.name), "    mrid: " + q(m.mrid), "    score_column: " + q(m.score)];
-        var body = isPacked(m) ? ["    packed: true"] : ["    features: " + list(f),
+        var body = isPacked(m) ? ["    packed: true"].concat(words(m.outputs).length ? ["    output_columns: " + list(words(m.outputs))] : [])
+          : ["    features: " + list(f),
           "    cat_features: " + list(m.cats.filter(function (x) { return f.indexOf(x) >= 0; }))];
         return head.concat(body, yLines(m.keep, 4)).join("\n");
       }).join("\n"));
@@ -766,6 +775,7 @@ function buildYaml(st) {
         ml.push("  packed: true    # обработка, фичи и типы — внутри модели (scoring_kit.pack_model)");
         if ((md.scoreColumn || "score") !== "score") ml.push("  score_column: " + q(md.scoreColumn));
         if (!md.checkRange) ml.push("  score_range: null");
+        if (words(md.outputs).length) ml.push("  output_columns: " + list(words(md.outputs)) + "    # признаки после обработки — из модели, а не из выборки");
       } else {
         if (!md.custom) ml.push("  output_kind: " + md.outputKind);
         if ((md.scoreColumn || "score") !== "score") ml.push("  score_column: " + q(md.scoreColumn));
@@ -894,6 +904,12 @@ function validate(st) {
   var repeated = uniq(colNames.filter(function (n, i) { return n && colNames.indexOf(n) !== i; }));
   repeated.forEach(function (n) { add(5, "Колонка «" + n + "» указана в результате несколько раз — оставьте одну строку."); });
   if (st.recipe === "dlh" && colNames.indexOf("processed_dttm") >= 0) add(5, "processed_dttm добавляет оператор DLH — уберите её из колонок.");
+  var outs = modelOutputs(st), scoreNames = scoreColumns(st);
+  outs.forEach(function (c) {
+    if (!IDENT.test(c)) add(4, "Признак для витрины «" + c + "»: только строчные латинские буквы, цифры и _.");
+    if (scoreNames.indexOf(c) >= 0) add(4, "Признак для витрины «" + c + "» совпадает с колонкой скора.");
+  });
+  if (uniq(outs).length !== outs.length) add(4, "Признаки для витрины повторяются: одну колонку может отдавать только одна модель.");
   var seen = {};
   return p.filter(function (x) { var k = x.step + "|" + x.text; if (seen[k]) return false; seen[k] = 1; return true; })
     .sort(function (a, b) { return a.step - b.step; });
@@ -975,11 +991,13 @@ function fromConfig(cfg) {
     st.model = {mrid: [].concat(m.mrid || []).join(", "), image: mi.id, customImage: mi.custom, customReq: mi.req,
       outputKind: m.output_kind || "proba", custom: !m.output_kind && !m.packed, packed: !!m.packed,
       checkRange: m.score_range !== null, scoreColumn: m.score_column || "score",
+      outputs: m.packed ? (m.output_columns || []).join(", ") : "",
       features: (m.features || []).join(", "), cats: (m.cat_features || []).slice(), float32: m.num_dtype === "float32"};
     flavors.model = m.flavor;
     var handled = ["mrid", "image", "requirements", "flavor", "score_column", "packed"];
     // У упакованной модели тип результата и типы фичей не используются: если они есть в конфиге, оставляем как были.
     if (!m.packed) handled = handled.concat(["output_kind", "features", "cat_features", "num_dtype"]);
+    else handled.push("output_columns");
     if (m.score_range === null && (m.packed || m.output_kind === "predict")) handled.push("score_range");
     keep.model = rest(m, handled);
   }
@@ -990,11 +1008,12 @@ function fromConfig(cfg) {
     st.multi = {image: di.id, customImage: di.custom, customReq: di.req, outputKind: d.output_kind || first.output_kind || "proba",
       float32: (d.num_dtype || first.num_dtype) === "float32",
       models: cfg.models.map(function (x) {
-        var own = rest(x, ["name", "mrid", "score_column", "features", "cat_features", "packed"]) || {};
+        var own = rest(x, ["name", "mrid", "score_column", "features", "cat_features", "packed"].concat(x.packed ? ["output_columns"] : [])) || {};
         // Совпадающее с общими настройками не дублируем в модели.
         if (own.image === dImage) delete own.image;
         if (JSON.stringify(own.requirements) === JSON.stringify(dReq)) delete own.requirements;
         return {name: x.name || "", mrid: [].concat(x.mrid || [])[0] || "", score: x.score_column || "", packed: !!x.packed,
+          outputs: x.packed ? (x.output_columns || []).join(", ") : "",
           features: (x.features || []).join(", "), cats: (x.cat_features || d.cat_features || []).slice(), keep: own};
       })};
     flavors.model_defaults = d.flavor;
@@ -1383,6 +1402,7 @@ function renderForm() {
     m += '<div class="grid2">' + input("model.scoreColumn", "Колонка скора", {ph: "score", rerender: true}) + "</div>";
     if (isPacked(state.model)) {
       m += checkbox("model.checkRange", "Скор — вероятность: останавливать процесс, если он вне диапазона от 0 до 1");
+      m += input("model.outputs", "Признаки после обработки, которые записать в витрину", {ph: "debt_log, dpd_days", rerender: true, hint: "Через запятую, под теми именами, которые получаются после обработки. Значения берутся из модели, а не из выборки. Имена покажет scoring describe. Можно оставить пустым."});
       m += packHelp();
     } else {
       if (!state.model.custom) m += '<div class="grid2">' + select("model.outputKind", "Что выдаёт модель", [["proba", "Вероятность (классификация)"], ["predict", "Число (регрессия)"]]) + "</div>";
@@ -1406,7 +1426,8 @@ function renderForm() {
         '<div class="grid2">' + input(p + ".name", "Короткое имя", {ph: "pd_30"}) + input(p + ".score", "Колонка скора", {ph: "score_30", rerender: true}) + "</div>" +
         input(p + ".mrid", "Ссылка в Model Registry", {ph: "team/pd_30/1.0.0"}) +
         checkbox(p + ".packed", "Упакована вместе с обработкой (<code>pack_model</code>)") +
-        (isPacked(md) ? "" : input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd", hint: "Через запятую, пробел или с новой строки."}) +
+        (isPacked(md) ? input(p + ".outputs", "Признаки после обработки, которые записать в витрину", {ph: "debt_log, dpd_days", rerender: true, hint: "Через запятую, под теми именами, которые получаются после обработки. Значения берутся из модели, а не из выборки. Имена покажет scoring describe. Можно оставить пустым."})
+          : input(p + ".features", "Фичи в порядке обучения", {textarea: true, short: true, rerender: true, ph: "feature_1, feature_2, segment_cd", hint: "Через запятую, пробел или с новой строки."}) +
           catChips(p, md.features, md.cats)) + "</div>";
     });
     m += '<div><button type="button" class="small" data-add-model="1">+ Добавить модель</button></div>';
@@ -1477,14 +1498,14 @@ function renderForm() {
     var name = fixed || c.index < 0
       ? '<input type="text" value="' + esc(c.name) + '" disabled aria-label="Колонка">'
       : '<input type="text" data-bind="sink.columns.' + c.index + '.name" data-rerender="1" value="' + esc(c.name) + '" placeholder="имя колонки" aria-label="Колонка">';
-    var parts = typeParts(c.type), other = parts.custom !== undefined;
+    var parts = typeParts(c.type), other = parts.custom !== undefined, fromModel = modelOutputs(state);
     var typeControls = '<select class="t-base" data-typepath="' + typePath + '" aria-label="Тип">' + COLUMN_TYPES.map(function (t) {
         return "<option" + (!other && t === parts.base ? " selected" : "") + ">" + t + "</option>";
       }).join("") + '<option value="__other"' + (other ? " selected" : "") + ">другой…</option></select>" +
       (other ? '<input type="text" class="t-custom" data-typepath="' + typePath + '" value="' + esc(parts.custom) + '" placeholder="тип целиком" aria-label="Тип целиком" spellcheck="false">'
         : SIZED_TYPES[parts.base] ? '<input type="text" class="t-size" data-typepath="' + typePath + '" value="' + esc(parts.size) + '" placeholder="' + SIZED_TYPES[parts.base] + '" aria-label="Размер" inputmode="numeric">'
         : '<span class="no-size">без размера</span>');
-    return '<div class="colrow' + (other ? " is-other" : "") + '">' + name + typeControls + (fixed ? '<span class="fixed">ключ / скор</span>'
+    return '<div class="colrow' + (other ? " is-other" : "") + '">' + name + typeControls + (fixed ? '<span class="fixed">' + (fromModel.indexOf(c.name) >= 0 ? "из модели" : "ключ / скор") + "</span>"
         : '<button type="button" class="link" data-remove-col="' + c.index + '">Убрать</button>') + "</div>";
   }).join("") + "</div><small>Размер вписывается в поле справа от типа: для <code>varchar</code> — длина, например 5; для <code>numeric</code> — точность и знаки после запятой, например 18,4. Пустой размер тоже допустим. " +
     (r === "dlh" ? "Всё, кроме скора, переносится из источника как есть." : "Ключ и скоры добавляются сами. Остальные колонки должны прийти из выборки.") +

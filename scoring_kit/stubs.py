@@ -124,9 +124,14 @@ class OutputType:
     def __repr__(self):
         return f"OutputType({self.type_name!r})"
 
+    @classmethod
+    def decimal(cls, precision, scale):
+        return cls("DecimalType", (precision, scale))
+
 
 for _name, _type in (
     ("FLOAT", "FloatType"), ("DOUBLE", "DoubleType"), ("INT", "IntegerType"), ("LONG", "LongType"),
+    ("SHORT", "ShortType"),
     ("STRING", "StringType"), ("DATE", "DateType"), ("TIMESTAMP", "TimestampType"), ("BOOL", "BooleanType"),
 ):
     setattr(OutputType, _name, OutputType(_type))

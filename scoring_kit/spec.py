@@ -173,8 +173,6 @@ class Model(_Strict):
                 )
             if len(self.mrid) != 1:
                 raise ValueError("model.packed: true — ровно один mrid (упакованная модель)")
-            if self.output_columns:
-                raise ValueError("model.packed: true — model.output_columns не поддерживаются")
         elif not self.features:
             raise ValueError(
                 "model.features: перечислите фичи в порядке обучения "
@@ -454,6 +452,17 @@ class Pipeline(_Strict):
         if dups:
             raise ValueError(f"sinks: одинаковые имена таблиц {dups} — task_id совпадут")
         getattr(self, f"_check_{self.recipe}")()
+        # Колонки, которые модель отдаёт в витрину (признаки после обработки): должны быть в приёмнике и не пересекаться.
+        produced: list[str] = []
+        for m in self.all_models:
+            clash = [c for c in m.output_columns if c in produced or c == m.score_column]
+            if clash:
+                raise ValueError(f"model.output_columns: колонки {clash} уже отдаёт другая модель или это колонка скора")
+            produced += [m.score_column, *m.output_columns]
+            for s in self._result_sinks():
+                lost = [c for c in m.output_columns if c not in s.columns]
+                if lost:
+                    raise ValueError(f"sink {s.table}: в columns нет колонок модели {lost} (model.output_columns)")
         if self.engine == "dlh" and self.recipe != "single_model":
             raise ValueError("engine: dlh пока поддерживается только для recipe: single_model")
         return self
@@ -489,8 +498,8 @@ class Pipeline(_Strict):
                     "engine: dlh — свой predictor.py не поддерживается; упакуйте модель (packed: true) "
                     "или укажите model.output_kind"
                 )
-            if m.output_columns:
-                raise ValueError("engine: dlh — model.output_columns не поддерживаются")
+            if m.output_columns and not m.packed:
+                raise ValueError("engine: dlh — model.output_columns поддерживаются только для упакованной модели (packed: true)")
             if len(self.sinks) != 1 or self.sinks[0].mode != "replace":
                 raise ValueError("engine: dlh — один приёмник в режиме replace (оператор пишет createOrReplace)")
             s = self.sinks[0]

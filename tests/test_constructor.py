@@ -97,7 +97,7 @@ Object.assign(s.model, {mrid: "t/m/1", packed: false, features: "a, b, c", cats:
 emit("t_single", s);
 s = A.defaultState();
 Object.assign(s, {name: "t_packed", owner: "u"}); Object.assign(s.source, {query: "select 1", key: "id"});
-Object.assign(s.model, {mrid: "t/m_packed/1", checkRange: false}); s.sink.table = "s.t_packed";
+Object.assign(s.model, {mrid: "t/m_packed/1", checkRange: false, outputs: "debt_log, dpd_days"}); s.sink.table = "s.t_packed";
 emit("t_packed", s);
 s = A.defaultState(); s.recipe = "dlh"; Object.assign(s, {name: "t_dlh", owner: "u"});
 Object.assign(s.source, {mode: "table", table: "s.src", key: "id"}); Object.assign(s.model, {mrid: "t/b/1", features: "a b"});
@@ -190,6 +190,8 @@ def test_form_logic_builds_valid_and_lossless_configs(tmp_path):
     single, packed = load_pipeline(tmp_path / "out" / "t_single"), load_pipeline(tmp_path / "out" / "t_packed")
     assert not single.model.packed and single.model.features == ["a", "b", "c"]
     assert packed.model.packed and packed.model.features == [] and packed.model.score_range is None
+    assert packed.model.output_columns == ["debt_log", "dpd_days"]              # признаки после обработки — в витрину
+    assert list(packed.sinks[0].columns) == ["id", "score", "debt_log", "dpd_days"]
     assert load_pipeline(tmp_path / "out" / "t_dlh").model.packed          # новый процесс на DLH — упакованная модель
     assert [m.packed for m in load_pipeline(tmp_path / "out" / "t_multi_packed").models] == [True, True, False]
     assert load_pipeline(tmp_path / "out" / "t_dlh").sinks[0].mode == "replace"

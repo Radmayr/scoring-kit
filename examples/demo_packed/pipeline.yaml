@@ -24,6 +24,7 @@ model:
   image: registry.example/mlops/lgbm:latest
   requirements: [numpy==1.26.0, pandas==2.1.1, lightgbm==3.3.5]
   packed: true
+  output_columns: [debt_log, dpd_days]          # признаки после обработки: берутся из модели, а не из выборки
 
 sinks:
   - table: sandbox.demo_packed_scores_fresh
@@ -32,3 +33,5 @@ sinks:
       client_id: bigint
       report_dt: date
       score: numeric
+      debt_log: numeric          # создан обработкой
+      dpd_days: numeric          # в выборке есть пропуски, в витрину идёт значение после fillna(-1)

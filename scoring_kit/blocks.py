@@ -310,7 +310,7 @@ def dlh_infer(
     b: DagBuilder,
     task_id: str,
     key_columns: list[str],
-    score_column: str,
+    outputs: dict[str, str],
     mrid: str,
     source_table: str,
     target_table: str,
@@ -323,10 +323,10 @@ def dlh_infer(
         "[\n"
         f"{' ' * (IND + 8)}ModelMeta(\n"
         f"{' ' * (IND + 12)}key_columns={lit(key_columns, IND + 12)},\n"
-        f"{' ' * (IND + 12)}output_columns={[score_column]!r},\n"
+        f"{' ' * (IND + 12)}output_columns={list(outputs)!r},\n"
         f"{' ' * (IND + 12)}mrid={mrid!r},\n"
-        # без явного типа оператор пишет float32 — теряется точность скора
-        f"{' ' * (IND + 12)}output_types={{{score_column!r}: OutputType.DOUBLE}},\n"
+        # типы заданы явно: без них оператор пишет float32, и скор теряет точность
+        f"{' ' * (IND + 12)}output_types={{{', '.join(f'{k!r}: {v}' for k, v in outputs.items())}}},\n"
         f"{' ' * (IND + 8)}),\n"
         f"{' ' * (IND + 4)}]"
     )

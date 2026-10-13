@@ -246,8 +246,11 @@ def sk_model_scores(model, X, output_kind):
     return np.asarray(model.predict(X))
 
 
-def sk_packed_scores(model, df, name):
-    """Скоры упакованной модели (scoring_kit.pack_model): обработка и приведение типов — внутри неё."""
+def sk_packed_predict(model, df, name, output_columns):
+    """Скоры упакованной модели (scoring_kit.pack_model) и её колонки для витрины.
+
+    Обработка и приведение типов — внутри модели. Возвращает (скоры, таблица с колонками модели).
+    """
     import numpy as np
 
     if not getattr(model, "scoring_kit_packed", False):
@@ -256,8 +259,17 @@ def sk_packed_scores(model, df, name):
             f"({type(model).__name__}). Упакуйте её scoring_kit.pack_model или уберите packed"
         )
     out = model.predict(df)
-    values = out.iloc[:, 0] if hasattr(out, "iloc") else out
-    return np.asarray(values, dtype="float64")
+    if not hasattr(out, "columns"):
+        if output_columns:
+            raise ValueError(f"[scoring-kit] модель {name} вернула только скор, колонок {list(output_columns)} в ответе нет")
+        return np.asarray(out, dtype="float64"), None
+    missing = [c for c in output_columns if c not in out.columns]
+    if missing:
+        raise ValueError(
+            f"[scoring-kit] модель {name} не возвращает колонки {missing} (model.output_columns). "
+            f"После обработки у неё есть: {list(out.columns[1:])}"
+        )
+    return np.asarray(out.iloc[:, 0], dtype="float64"), out
 
 
 # ---------------------------------------------------------------- multi_model: слияние job'ов

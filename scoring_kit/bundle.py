@@ -140,7 +140,13 @@ __HELPERS__
         else:
             values = np.asarray(model.predict(X))
         values = values[:, 1] if values.ndim == 2 else values
-        return pd.DataFrame({s["score_column"]: values.astype("float64")}, index=df.index)
+        result = pd.DataFrame({s["score_column"]: values.astype("float64")}, index=df.index)
+        # Рядом со скором — признаки после обработки (до приведения типов): процесс может записать
+        # их в витрину, перечислив в model.output_columns. Скор всегда первой колонкой.
+        for column in data.columns:
+            if column != s["score_column"]:
+                result[column] = data[column].to_numpy()
+        return result
 
     def describe(self):
         """Что внутри упаковки: для ревью и для проверки перед загрузкой в реестр."""
@@ -160,6 +166,8 @@ __HELPERS__
             "  категориальные:    " + (", ".join(s["cat_features"]) or "-"),
             "  приведение типов:  " + cast,
         ]
+        if s.get("produced_columns"):
+            lines.append("  можно писать в витрину (после обработки): " + ", ".join(s["produced_columns"]))
         if s.get("prepare_source"):
             lines += ["  обработка:", ""] + ["    " + line for line in s["prepare_source"].rstrip().splitlines()]
         else:
@@ -427,7 +435,8 @@ def pack_model(
     cast          False — не приводить типы автоматически (всё делает prepare).
     path          куда сохранить файл; None — не сохранять.
 
-    Возвращает упакованный объект: `.predict(df)` -> DataFrame со скором, `.describe()` -> что внутри.
+    Возвращает упакованный объект: `.predict(df)` -> DataFrame со скором и признаками после обработки,
+    `.describe()` -> что внутри.
     """
     state = _state(
         model, features=list(features), cat_features=list(cat_features), num_dtype=num_dtype, cat_as=cat_as,
@@ -443,6 +452,12 @@ def pack_model(
         state["input_columns"] = _infer_input_columns(state, sample)
         if not state["input_columns"]:
             raise PackError("не удалось определить входные колонки по sample: задайте input_columns=[...] явно")
+    if sample is not None:
+        try:
+            # какие колонки модель отдаёт рядом со скором: их имена можно указать в процессе для записи в витрину
+            state["produced_columns"] = [str(c) for c in _materialize(state).predict(sample.head(20)).columns[1:]]
+        except Exception:
+            pass          # понятную ошибку даст самопроверка ниже
     # Дальше работаем только с тем, что реально восстановится из файла.
     payload = pickle.dumps(_materialize(state))
     restored = pickle.loads(payload)

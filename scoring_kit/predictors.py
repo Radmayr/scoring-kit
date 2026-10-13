@@ -24,6 +24,7 @@ def contract(model: Model) -> dict:
         "score_column": model.score_column,
         "output_kind": model.output_kind,
         "packed": model.packed,
+        "output_columns": list(model.output_columns) if model.packed else [],
         "features": list(model.features),
         "cat_features": list(model.cat_features),
         "num_dtype": model.num_dtype,
@@ -62,20 +63,24 @@ def builtin_predictor_class(models: list[Model], class_name: str) -> str:
     predict = _method(
         "predict",
         "self, df",
-        (runtime.sk_prepare_features, runtime.sk_model_scores, runtime.sk_packed_scores, runtime.sk_check_scores),
+        (runtime.sk_prepare_features, runtime.sk_model_scores, runtime.sk_packed_predict, runtime.sk_check_scores),
         """
         n_rows = len(df)
+        # Каждая модель считает по исходному батчу: то, что вернула одна, не попадает на вход другой.
+        result = df.copy()
         for contract, model in zip(self.contracts, self.loaded):
             if contract["packed"]:
-                scores = sk_packed_scores(model, df, contract["name"])
+                scores, produced = sk_packed_predict(model, df, contract["name"], contract["output_columns"])
+                for column in contract["output_columns"]:
+                    result[column] = produced[column].to_numpy()
             else:
                 X = sk_prepare_features(
                     df, contract["features"], contract["cat_features"], contract["num_dtype"], contract["cat_as"]
                 )[contract["features"]]
                 scores = sk_model_scores(model, X, contract["output_kind"])
-            df[contract["score_column"]] = scores
-            sk_check_scores(df, n_rows, contract["score_column"], contract["score_range"])
-        return df
+            result[contract["score_column"]] = scores
+            sk_check_scores(result, n_rows, contract["score_column"], contract["score_range"])
+        return result
         """,
     )
     return header + setup + "\n" + predict

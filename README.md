@@ -44,10 +44,10 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.7.5"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.8.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.7.5`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.8.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Конструктор: процесс без программирования
@@ -175,7 +175,26 @@ model:
 - LightGBM и CatBoost хранит в переносимом виде, поэтому версии библиотек в поде могут отличаться
   от обучения; остальные модели хранятся через pickle, для них версии должны совпадать.
 
-`scoring describe model_packed.pkl` показывает, что внутри: обработку, фичи, типы. Если
+**Признаки после обработки в витрине.** Упакованная модель отдаёт не только скор, но и признаки в том
+виде, в каком они получились после `prepare`. Чтобы записать их в результат, перечислите имена в
+`model.output_columns` и добавьте эти колонки в `sinks[].columns`:
+
+```yaml
+model:
+  mrid: tenant/model_packed/1.0.0
+  packed: true
+  output_columns: [debt_log, dpd_days]    # из модели, после обработки
+sinks:
+  - table: schema.scores
+    columns: {client_id: bigint, score: numeric, debt_log: numeric, dpd_days: numeric}
+```
+
+Колонка из `output_columns` берётся из модели, даже если в выборке есть колонка с таким же именем;
+остальные колонки результата переносятся из выборки как есть. Работает в обоих движках и в
+`multi_model` (у каждой модели свой список; одну колонку отдаёт одна модель).
+
+`scoring describe model_packed.pkl` показывает, что внутри: обработку, фичи, типы и имена колонок,
+которые можно писать в витрину. Если
 scoring-kit в среду с ноутбуком не поставить, `scoring packer` выгружает упаковщик одним файлом
 `scoring_pack.py` без зависимостей: `from scoring_pack import pack_model`.
 
@@ -411,7 +430,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.7.5`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.8.0`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
 (`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 
