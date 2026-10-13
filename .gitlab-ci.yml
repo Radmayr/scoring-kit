@@ -1,24 +1,36 @@
-# Шаблон CI для GitLab: тесты фреймворка на двух наборах версий.
-# Образ и pip-индекс подставьте свои (внутренний прокси, если наружу ходить нельзя).
+# Тесты фреймворка на двух наборах версий.
+#
+# Пайплайн запускается, только если в проекте задана переменная SK_PYTHON_IMAGE — образ с Python
+# и pip, доступный вашим раннерам (например, внутренний образ из корпоративного хранилища).
+# Если пакеты ставятся через внутреннее зеркало, задайте там же PIP_INDEX_URL.
+# Без SK_PYTHON_IMAGE пайплайн не создаётся и не висит красным.
 stages: [test]
 
-.test: &test
-  stage: test
-  image: python:3.10
-  script:
-    - pip install -e ".[dev]" ${EXTRA_PIP}
-    - python -m pytest -q
+workflow:
   rules:
+    - if: $SK_PYTHON_IMAGE == null || $SK_PYTHON_IMAGE == ""
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
+
+.test: &test
+  stage: test
+  image: $SK_PYTHON_IMAGE
+  script:
+    - pip install --upgrade pip
+    - pip install -e ".[dev]" ${EXTRA_PIP}
+    - python -m pytest -q          # тесты конструктора требуют node и без него пропускаются
 
 # Версии, которые стоят в подах Airflow (pandas 2.1.4, numpy 1.26.4, lightgbm 3.3.5)
 test-platform-versions:
   <<: *test
   variables:
+    PIP_ONLY_BINARY: "pydantic-core,pydantic,pandas,numpy,pyyaml,pyarrow,scikit-learn,scipy,lightgbm"
     EXTRA_PIP: "pandas==2.1.4 numpy==1.26.4 lightgbm==3.3.5"
 
 # Свежие версии зависимостей
 test-latest:
   <<: *test
+  variables:
+    PIP_ONLY_BINARY: "pydantic-core,pydantic,pandas,numpy,pyyaml,pyarrow,scikit-learn,scipy,lightgbm"
