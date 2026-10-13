@@ -170,7 +170,8 @@ pre.yaml { margin: 0; background: var(--sunken); border: 1px solid var(--line); 
 .overlay[hidden] { display: none; }
 .overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--ink) 45%, transparent); display: grid; place-items: center; padding: 16px; z-index: 10; }
 .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; width: min(640px, 100%); display: grid; gap: 12px; }
-.modal textarea { min-height: 260px; }
+.modal textarea { min-height: 150px; }
+.modal { max-height: calc(100vh - 32px); overflow: auto; }
 .error { color: var(--check); font-size: 13.5px; }
 details.help { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: var(--sunken); }
 details.help summary { cursor: pointer; font-weight: 500; font-size: 14px; color: var(--ours); }
@@ -181,7 +182,12 @@ details.help pre.yaml { background: var(--surface); max-height: none; }
 .step h3 { font: 600 14.5px/1.3 var(--font-body); margin-top: 6px; }
 .send-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
 .send-row select { flex: 1 1 160px; }
-.send-row[hidden], #gl-open-row[hidden] { display: none; }
+.send-row[hidden] { display: none; }
+.proc-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; }
+.proc-list button { display: flex; justify-content: space-between; gap: 12px; text-align: left; font-family: var(--font-mono); font-size: 13px; }
+.proc-list button span { font-family: var(--font-body); color: var(--ours); }
+.modal h3 { font: 600 14.5px/1.3 var(--font-body); margin: 4px 0 0; }
+.modal .warn-note { margin: 0; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; background: color-mix(in srgb, var(--check) 10%, var(--surface)); }
 #send-on, #gl-auth { display: grid; gap: 10px; }
 #gl-auth[hidden] { display: none; }
 .demo-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); font-size: 13.5px; }
@@ -203,7 +209,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
       <p class="muted">Идите по шагам слева. Справа видно, какой процесс получится и что ещё не заполнено. На последнем шаге процесс отправляется на инстанс. Airflow и программирование не нужны.</p>
     </div>
     <div class="actions">
-      <button type="button" id="btn-import">Открыть существующий процесс</button>
+      <button type="button" id="btn-import">Изменить существующий процесс</button>
       <button type="button" id="btn-reset">Начать заново</button>
     </div>
   </header>
@@ -243,14 +249,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
           <div class="send-row">
             <button type="button" class="small" id="gl-check">Проверить доступ</button>
             <span class="hint" id="gl-user"></span>
-          </div>
-          <div class="field" id="gl-open-row" hidden>
-            <span>Изменить существующий процесс</span>
-            <div class="send-row">
-              <select id="gl-existing" aria-label="Процесс из GitLab"></select>
-              <button type="button" class="small" id="gl-open">Открыть из GitLab</button>
-            </div>
-            <small>Нужно, только если правите процесс, который уже есть в репозитории. Для нового процесса пропустите.</small>
           </div>
           </div>
           <div class="send-row">
@@ -293,8 +291,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
   <div class="overlay" id="import" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
-      <h2 id="import-title">Открыть существующий процесс</h2>
-      <p class="hint">Вставьте содержимое <code>pipeline.yaml</code> из GitLab — форма заполнится, и процесс можно будет поправить.</p>
+      <h2 id="import-title">Изменить существующий процесс</h2>
+      <p class="warn-note">Форма будет заменена настройками выбранного процесса. Всё, что введено сейчас и не отправлено, пропадёт.</p>
+      <div id="import-gitlab">
+        <h3>Выбрать из GitLab</h3>
+        <p class="hint" id="import-gl-status"></p>
+        <div class="proc-list" id="import-list"></div>
+      </div>
+      <h3>Или вставить конфиг</h3>
+      <p class="hint">Содержимое <code>pipeline.yaml</code>. Так удобно сделать новый процесс по образцу: после вставки поменяйте имя и таблицу результата.</p>
       <textarea id="import-text" spellcheck="false" placeholder="recipe: single_model&#10;dag_id: ..."></textarea>
       <p class="error" id="import-error" hidden></p>
       <div class="actions">
@@ -1107,7 +1112,7 @@ function gitlabClient(cfg, token, fetchImpl) {
       return self.getFile(file).then(function (current) {
         existed = current !== null;
         if (existed && !job.folder) {
-          var taken = new Error("Процесс с именем " + job.name + " уже есть в GitLab. Чтобы изменить его, откройте его кнопкой «Открыть из GitLab»; для нового процесса выберите другое имя.");
+          var taken = new Error("Процесс с именем " + job.name + " уже есть в GitLab. Чтобы изменить его, нажмите вверху страницы «Изменить существующий процесс»; для нового процесса выберите другое имя.");
           taken.status = -1; throw taken;
         }
         if (existed && current === job.yaml) { var same = new Error("В GitLab уже лежит точно такой же конфиг — отправлять нечего."); same.status = -1; throw same; }
@@ -1123,7 +1128,7 @@ function gitlabClient(cfg, token, fetchImpl) {
           var owner = owners.filter(Boolean)[0];
           if (owner) {
             var dup = new Error("DAG с именем " + job.name + " уже есть: это процесс из папки pipelines/" + owner +
-              ". Чтобы изменить его, выберите его в списке «Изменить существующий процесс»; для нового процесса задайте другое имя.");
+              ". Чтобы изменить его, нажмите вверху страницы «Изменить существующий процесс»; для нового процесса задайте другое имя.");
             dup.status = -1; throw dup;
           }
         });
@@ -1696,7 +1701,8 @@ form.addEventListener("input", function () { if (state.example) { state.example 
 
 var overlay = document.getElementById("import");
 document.getElementById("btn-import").addEventListener("click", function () {
-  overlay.hidden = false; document.getElementById("import-error").hidden = true; document.getElementById("import-text").focus();
+  overlay.hidden = false; document.getElementById("import-error").hidden = true;
+  loadProcessList();
 });
 document.getElementById("import-cancel").addEventListener("click", function () { overlay.hidden = true; });
 document.getElementById("import-ok").addEventListener("click", function () {
@@ -1794,14 +1800,13 @@ el("gl-check").addEventListener("click", function () {
   c.whoami().then(function (user) {
     return c.listPipelines().then(function (names) {
       info.textContent = "Вы вошли как " + user.username + ". Процессов в репозитории: " + names.length + ".";
-      el("gl-existing").innerHTML = names.map(function (n) { return "<option>" + esc(n) + "</option>"; }).join("");
-      el("gl-open-row").hidden = !names.length;
     });
   }).catch(function (err) { info.textContent = err.message; });
 });
-el("gl-open").addEventListener("click", function () {
-  var name = el("gl-existing").value, info = el("gl-user");
-  if (!name) return;
+// Открыть процесс из GitLab: вызывается только из окна «Изменить существующий процесс».
+function openFromGitlab(name) {
+  var status = el("import-gl-status");
+  status.textContent = "Открываю " + name + "…";
   client().getFile("pipelines/" + name + "/pipeline.yaml").then(function (text) {
     if (text === null) throw new Error("В папке " + name + " нет pipeline.yaml.");
     if (typeof jsyaml === "undefined") throw new Error("Не загрузилась библиотека чтения YAML: нужен доступ к cdnjs.cloudflare.com.");
@@ -1809,9 +1814,28 @@ el("gl-open").addEventListener("click", function () {
     var keepTracking = state.tracking;
     state = fromConfig(cfg); state.tracking = keepTracking; state.folder = name;
     state.origName = state.name; state.origTable = state.sink.table; state.copyMode = "new";
-    info.textContent = "Открыт процесс " + name + ". Поправьте форму и отправьте.";
+    state.step = 1;
+    document.getElementById("import").hidden = true;
     renderForm();
-  }).catch(function (err) { info.textContent = err.message; });
+  }).catch(function (err) { status.textContent = err.message; });
+}
+function loadProcessList() {
+  var box = el("import-gitlab"), status = el("import-gl-status"), listBox = el("import-list");
+  box.hidden = !GL;
+  listBox.innerHTML = "";
+  if (!GL) return;
+  if (!token()) { status.textContent = "Чтобы выбрать процесс из GitLab, сначала введите токен на шаге 6 «Отправить»."; return; }
+  status.textContent = "Загружаю список…";
+  client().listPipelines().then(function (names) {
+    status.textContent = names.length ? "Нажмите на процесс, чтобы открыть его в форме." : "В репозитории пока нет процессов.";
+    listBox.innerHTML = names.map(function (n) {
+      return '<button type="button" data-open-process="' + esc(n) + '">' + esc(n) + "<span>открыть</span></button>";
+    }).join("");
+  }).catch(function (err) { status.textContent = err.message; });
+}
+el("import-list").addEventListener("click", function (e) {
+  var b = e.target.closest("[data-open-process]");
+  if (b) openFromGitlab(b.getAttribute("data-open-process"));
 });
 // Демонстрация: те же сообщения, что покажет настоящая отправка, по таймеру. Ничего не отправляется.
 var demoTimer = null;
