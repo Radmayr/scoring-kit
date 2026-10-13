@@ -124,7 +124,7 @@ def assemble(root: Path, env: str, out: Optional[Path] = None) -> Plan:
     if env not in environments:
         raise PipelineError(f"{ENVIRONMENTS_FILE}: нет окружения '{env}' (есть: {', '.join(environments)})")
     cfg = environments[env]
-    out = (out or root / "publish").resolve()
+    out = (out or root / "publish" / env).resolve()
     plan = Plan(env=env, instance=cfg["instance"], project=cfg["project"], out=out, endpoint=cfg.get("endpoint"))
 
     shadow = shadow_dirs(root)

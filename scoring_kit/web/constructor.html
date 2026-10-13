@@ -226,6 +226,13 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
           <small id="send-stage-hint"></small>
         </label>
         <label class="check"><input type="checkbox" id="send-replaces"> <span>Процесс заменяет существующий или пишет в уже используемую таблицу</span></label>
+        <label class="field" id="send-copy-box" hidden><span>Имя процесса изменено</span>
+          <select id="send-copy">
+            <option value="new">Создать новый процесс, исходный оставить как есть</option>
+            <option value="rename">Переименовать исходный процесс</option>
+          </select>
+          <small id="send-copy-hint"></small>
+        </label>
         <p class="demo-note" id="send-off" hidden>Это демо-версия: кнопка ниже показывает, как пойдёт отправка, но ничего никуда не отправляет. В сборке для команды она работает с вашим GitLab.</p>
         <div id="send-on">
           <div id="gl-auth">
@@ -401,6 +408,7 @@ function defaultState() {
     stage: "test", replaces: false, tracking: null,
     step: 1, reached: 1,   // текущий шаг мастера и самый дальний, до которого дошли
     folder: "",        // папка процесса в GitLab, если он открыт оттуда (имя папки может отличаться от имени DAG'а)
+    origName: "", origTable: "", copyMode: "new",   // имя и таблица открытого процесса; что делать, если имя поменяли
     gpService: TEAM.gp_service || "",
     schedule: {kind: "daily", time: "07:30", dow: "1", cron: "", orig: "", tz: ""},
     alerts: "", wait: "", size: "medium", flavors: {},
@@ -1694,8 +1702,22 @@ function stageHint() {
     ? "Процесс попадёт на боевой инстанс после проверок и публикации участником с правом на это."
     : "На тестовый инстанс уйдёт теневая версия: DAG с суффиксом _shadow пишет в таблицы _shadow. Боевые данные не затрагиваются.";
 }
+// В какую папку репозитория уйдёт конфиг. Пусто — новый процесс в папке со своим именем.
+// Открытый процесс с изменённым именем по умолчанию считается новым: исходный не затирается.
+function renamed() { return !!state.folder && !!state.origName && state.name !== state.origName; }
+function targetFolder() {
+  if (!state.folder) return "";
+  return renamed() && state.copyMode !== "rename" ? "" : state.folder;
+}
 function renderSend() {
   if (state.replaces) state.stage = "test";
+  var isRenamed = renamed(), asNew = isRenamed && state.copyMode !== "rename";
+  el("send-copy-box").hidden = !isRenamed;
+  el("send-copy").value = state.copyMode === "rename" ? "rename" : "new";
+  el("send-copy-hint").textContent = !isRenamed ? "" : asNew
+    ? "Процесс " + state.origName + " останется без изменений." + (state.sink.table && state.sink.table === state.origTable
+        ? " Внимание: новый процесс пишет в ту же таблицу " + state.sink.table + ", что и исходный. Поменяйте её на шаге 5, иначе два процесса будут писать в одну таблицу." : "")
+    : "DAG " + state.origName + " исчезнет с инстанса, вместо него появится " + (state.name || "…") + ". Конфиг останется в папке pipelines/" + state.folder + ".";
   el("send-stage").value = state.stage;
   el("send-stage").querySelector('option[value="prod"]').disabled = !!state.replaces;
   el("send-replaces").checked = !!state.replaces;
@@ -1708,7 +1730,7 @@ function renderSend() {
   el("send-go").textContent = (state.stage === "prod" ? "Отправить на прод" : "Отправить на тест") + (GL ? "" : " (демо)");
   el("send-hint").textContent = problems ? "Сначала исправьте замечания в блоке «Проверка»: " + problems + "."
     : needToken ? "Введите токен GitLab." : busy ? "Этот процесс уже отправлен, идёт выкладка."
-    : state.folder ? "Изменится процесс из папки pipelines/" + state.folder + "." : "Будет создан новый процесс pipelines/" + (state.name || "…") + ".";
+    : targetFolder() ? "Изменится процесс из папки pipelines/" + targetFolder() + "." : "Будет создан новый процесс pipelines/" + (state.name || "…") + ".";
   var t = state.tracking;
   el("send-status").hidden = !t;
   if (t) {
@@ -1738,6 +1760,7 @@ function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = 
 
 el("send-stage").addEventListener("change", function () { state.stage = this.value; refresh(); });
 el("send-replaces").addEventListener("change", function () { state.replaces = this.checked; refresh(); });
+el("send-copy").addEventListener("change", function () { state.copyMode = this.value; refresh(); });
 el("gl-token").addEventListener("input", function () {
   try { localStorage.setItem(TOKEN_KEY, token()); } catch (e) {}
   renderSend();
@@ -1764,6 +1787,7 @@ el("gl-open").addEventListener("click", function () {
     var cfg = jsyaml.load(text, {schema: jsyaml.CORE_SCHEMA});
     var keepTracking = state.tracking;
     state = fromConfig(cfg); state.tracking = keepTracking; state.folder = name;
+    state.origName = state.name; state.origTable = state.sink.table; state.copyMode = "new";
     info.textContent = "Открыт процесс " + name + ". Поправьте форму и отправьте.";
     renderForm();
   }).catch(function (err) { info.textContent = err.message; });
@@ -1804,7 +1828,7 @@ el("send-go").addEventListener("click", function () {
   button.disabled = true; el("send-hint").textContent = "Отправляю в GitLab…";
   client().whoami().then(function (user) {
     var title = (target === "prod" ? "На прод: " : "На тест: ") + name;
-    return client().submit({name: name, folder: state.folder, yaml: buildYaml(state), stamp: stamp, title: title,
+    return client().submit({name: name, folder: targetFolder(), yaml: buildYaml(state), stamp: stamp, title: title,
       description: "Отправлено из конструктора скоринга пользователем " + user.username + ".\n\n" +
         (target === "prod" ? "Процесс публикуется на боевой инстанс." : "Процесс идёт в тень: на тестовый инстанс уходит версия с суффиксом _shadow.")});
   }).then(function (mr) {
