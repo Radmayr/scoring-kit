@@ -304,13 +304,27 @@ class CohortFrom(_Strict):
     truncate: Literal["day", "week", "month", "quarter", "year"] = "month"
 
 
+# {поле: [значение | [значения группы], ...]}; несколько полей — декартово произведение.
+SegmentValues = dict[str, list[Union[str, int, list[Union[str, int]]]]]
+
+
+class CalibPreset(_Strict):
+    """Набор сегментов со своим окном обучения (например, у разных продуктов разная длина окна)."""
+
+    name: str
+    segments: SegmentValues = Field(min_length=1)
+    # Если не задано — берётся calibrate.train_offsets.
+    train_offsets: Optional[list[int]] = None
+
+
 class Calibrate(_Strict):
     method: Literal["isotonic", "sigmoid"] = "isotonic"
     score: str
     target: str
     output: str
-    # {поле: [значение | [значения группы], ...]}; несколько полей — декартово произведение.
-    segments: dict[str, list[Union[str, int, list[Union[str, int]]]]] = Field(min_length=1)
+    # Либо один набор сегментов (segments), либо несколько со своими окнами (presets).
+    segments: Optional[SegmentValues] = Field(None, min_length=1)
+    presets: Optional[list[CalibPreset]] = Field(None, min_length=1)
     cohort_column: str = "cohort"
     # Если задано — колонка когорты считается из даты в dev и apply (в запросах она не нужна).
     cohort_from: Optional[CohortFrom] = None
@@ -319,8 +333,9 @@ class Calibrate(_Strict):
     # Для когорты на позиции i (в отсортированном списке когорт сегмента в dev) обучение идёт
     # на когортах с позициями i+offset. [-3, -2] = как в текущем процессе.
     train_offsets: list[int] = [-3, -2]
-    # Что писать, если строка apply не откалибровалась (нет когорты/сегмента).
-    uncalibrated: Literal["null", "copy_score"] = "null"
+    # Что делать со строкой apply, которая не откалибровалась (нет когорты/сегмента):
+    # null — оставить пусто, copy_score — записать исходный скор, drop — не писать строку.
+    uncalibrated: Literal["null", "copy_score", "drop"] = "null"
 
     @field_validator("uncalibrated", mode="before")
     @classmethod
@@ -330,16 +345,41 @@ class Calibrate(_Strict):
 
     @model_validator(mode="after")
     def _check(self):
-        _check_idents([self.score, self.target, self.output, self.cohort_column, *self.segments], "calibrate")
+        if (self.segments is None) == (self.presets is None):
+            raise ValueError("calibrate: укажите ровно одно из segments (один набор) или presets (несколько наборов)")
+        _check_idents([self.score, self.target, self.output, self.cohort_column, *self.segment_fields], "calibrate")
         if self.cohort_from is not None:
             _check_idents([self.cohort_from.column], "calibrate.cohort_from.column")
-        if not self.train_offsets or any(o >= 0 for o in self.train_offsets):
-            raise ValueError("calibrate.train_offsets: нужны отрицательные сдвиги, например [-3, -2]")
+        names = [p.name for p in self.presets or []]
+        dups = sorted({n for n in names if names.count(n) > 1})
+        if dups:
+            raise ValueError(f"calibrate.presets: одинаковые имена {dups}")
+        for preset in self.resolved_presets:
+            offsets = preset["train_offsets"]
+            if not offsets or any(o >= 0 for o in offsets):
+                where = f"presets[{preset['name']}]" if preset["name"] else "calibrate"
+                raise ValueError(f"{where}.train_offsets: нужны отрицательные сдвиги, например [-3, -2]")
         return self
 
     @property
+    def resolved_presets(self) -> list[dict]:
+        """Наборы сегментов с окнами в едином виде; без presets — один безымянный набор."""
+        if self.presets is None:
+            return [{"name": None, "segments": self.segments, "train_offsets": list(self.train_offsets)}]
+        return [
+            {"name": p.name, "segments": p.segments,
+             "train_offsets": list(p.train_offsets if p.train_offsets is not None else self.train_offsets)}
+            for p in self.presets
+        ]
+
+    @property
+    def segment_fields(self) -> list[str]:
+        sources = [self.segments] if self.presets is None else [p.segments for p in self.presets]
+        return list(dict.fromkeys(f for segments in sources if segments for f in segments))
+
+    @property
     def first_position(self) -> int:
-        return -min(self.train_offsets)
+        return max(-min(p["train_offsets"]) for p in self.resolved_presets)
 
 
 # ---------------------------------------------------------------- пайплайн

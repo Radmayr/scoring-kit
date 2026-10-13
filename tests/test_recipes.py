@@ -297,6 +297,74 @@ def test_calibration_window_segments_and_date_cohort_match_notebook(tmp_path):
     assert report["cohort"].dropna().str.match(r"\d{4}-\d{2}-01").all()
 
 
+NOTEBOOK_PRESETS = [
+    {"name": "cln", "segments": {"product_cd": ["CLN"], "double": [0, 1, 2]}, "duration": 2},
+    {"name": "ref", "segments": {"product_cd": ["REF"], "double": [0, 1, 2]}, "duration": 3},
+    {"name": "mortgage", "segments": {"product_cd": [["MTG", "MTF", "MTB", "MTP"]], "double": [0, 1, 2]}, "duration": 4},
+]
+
+
+def presets_config(presets, delta=1):
+    return [
+        {"name": p["name"], "segments": p["segments"],
+         "train_offsets": list(range(-(p["duration"] + delta), -delta))}
+        for p in presets
+    ]
+
+
+def test_calibration_presets_match_notebook(tmp_path):
+    """Три пресета с разной длиной окна пишут в один результат; в нём только откалиброванные строки."""
+    d = patched(
+        tmp_path, CALIB,
+        calibrate__segments=...,
+        calibrate__presets=presets_config(NOTEBOOK_PRESETS),
+        calibrate__cohort_from={"column": "due_dt", "truncate": "month"},
+        calibrate__target_fill=0,
+        calibrate__uncalibrated="drop",
+    )
+    dev, apply = windowed_data()
+    dev.to_csv(tmp_path / "dev.csv", index=False)
+    apply.to_csv(tmp_path / "apply.csv", index=False)
+    result = run_debug(d, {"read_dev": tmp_path / "dev.csv", "read_apply": tmp_path / "apply.csv"}, [], tmp_path / "out")
+
+    parts = []
+    for preset in NOTEBOOK_PRESETS:
+        legacy = legacy_calibration_windowed(
+            pd.read_csv(tmp_path / "dev.csv"), pd.read_csv(tmp_path / "apply.csv"), preset["segments"],
+            "base_score", "base_target", ["account_id", "report_dt"], duration=preset["duration"], delta=1,
+        )
+        parts.append(legacy[legacy["base_score_calib"].notna()])
+    exp = pd.concat(parts).set_index("account_id")["base_score_calib"]
+    got = result.scored.set_index("account_id")["base_score_calib"]
+    assert len(got) == len(exp) > 500 and got.notna().all()
+    np.testing.assert_allclose(got.sort_index().to_numpy(), exp.sort_index().to_numpy(), rtol=0, atol=1e-12)
+    assert set(got.index) == set(exp.index)
+
+    report = result.to_write["sandbox.demo_calib_report_hist"]
+    assert report["segment"].str.startswith(("cln: ", "ref: ", "mortgage: ")).all()
+    windows = report[report["status"] == "ok"].assign(n=lambda r: r["train_cohorts"].str.count(",") + 1)
+    assert windows.groupby(windows["segment"].str.split(":").str[0])["n"].unique().map(list).to_dict() == {
+        "cln": [2], "ref": [3], "mortgage": [4]}
+
+
+def test_calibration_presets_must_not_overlap(tmp_path):
+    overlapping = presets_config(NOTEBOOK_PRESETS[:1] + [dict(NOTEBOOK_PRESETS[0], name="again", duration=3)])
+    d = patched(
+        tmp_path, CALIB, calibrate__segments=..., calibrate__presets=overlapping,
+        calibrate__cohort_from={"column": "due_dt", "truncate": "month"}, calibrate__target_fill=0,
+    )
+    dev, apply = windowed_data()
+    dev.to_csv(tmp_path / "dev.csv", index=False)
+    apply.to_csv(tmp_path / "apply.csv", index=False)
+    with pytest.raises(Exception, match="пересекаются"):
+        run_debug(d, {"read_dev": tmp_path / "dev.csv", "read_apply": tmp_path / "apply.csv"}, [], tmp_path / "out")
+
+
+def test_calibration_needs_segments_or_presets(tmp_path):
+    with pytest.raises(PipelineError, match="ровно одно"):
+        load_pipeline(patched(tmp_path, CALIB, calibrate__presets=presets_config(NOTEBOOK_PRESETS)))
+
+
 def test_calibration_empty_target_needs_explicit_fill(tmp_path):
     d = patched(
         tmp_path, CALIB, calibrate__segments=WINDOWED_SEGMENTS, calibrate__train_offsets=[-2, -1],

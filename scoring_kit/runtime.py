@@ -298,6 +298,9 @@ def sk_calibrate(dev, apply, cfg):
     позициями i + train_offsets и применяется к строкам apply той же когорты.
     Возвращает (apply + колонка калиброванного скора, отчёт по ячейкам).
 
+    presets — несколько наборов сегментов, у каждого своё окно (train_offsets); все пишут в один результат.
+    uncalibrated: null — оставить пусто, copy_score — исходный скор, drop — не писать такие строки.
+
     cohort_from — посчитать когорту из даты (как date_trunc в SQL) вместо готовой колонки;
     target_fill — чем заменить пустой факт в dev (незрелые когорты); строки dev без скора не участвуют.
     """
@@ -307,9 +310,7 @@ def sk_calibrate(dev, apply, cfg):
     import pandas as pd
 
     score, target, output = cfg["score"], cfg["target"], cfg["output"]
-    cohort, offsets, method = cfg["cohort_column"], sorted(cfg["train_offsets"]), cfg["method"]
-    first = -min(offsets)
-    fields = list(cfg["segments"])
+    cohort, method = cfg["cohort_column"], cfg["method"]
 
     cohort_from = cfg.get("cohort_from")
     if cohort_from:
@@ -362,62 +363,83 @@ def sk_calibrate(dev, apply, cfg):
             return frame[field].isin(list(value)).to_numpy()
         return (frame[field] == value).to_numpy()
 
+    # Пресет — набор сегментов со своим окном обучения; без пресетов — один набор на всю калибровку.
+    presets = cfg.get("presets") or [
+        {"name": None, "segments": cfg["segments"], "train_offsets": cfg["train_offsets"]}
+    ]
     calibrated = pd.Series(np.nan, index=apply.index, dtype="float64")
+    taken = pd.Series("", index=apply.index, dtype=object)
     report = []
-    for combo in itertools.product(*(cfg["segments"][f] for f in fields)):
-        segment = " & ".join(f"{f}={v}" for f, v in zip(fields, combo))
-        dm = np.ones(len(dev), dtype=bool)
-        am = np.ones(len(apply), dtype=bool)
-        for f, v in zip(fields, combo):
-            dm &= mask(dev, f, v)
-            am &= mask(apply, f, v)
-        dev_seg, apply_seg = dev[dm], apply[am]
-        cohorts = sorted(dev_seg[cohort].dropna().unique())
-        print(f"[scoring-kit] сегмент {segment}: dev {len(dev_seg)} строк, когорт {len(cohorts)}, apply {len(apply_seg)}")
-        if len(cohorts) <= first:
-            report.append({
-                "segment": segment, "cohort": None, "status": "мало когорт в dev", "train_cohorts": None,
-                "train_rows": 0, "test_rows": 0, "apply_rows": int(len(apply_seg)),
-                "brier_raw": None, "brier_calibrated": None,
-            })
-            continue
-        for i in range(first, len(cohorts)):
-            test_cohort = cohorts[i]
-            train_cohorts = [cohorts[i + o] for o in offsets]
-            train = dev_seg[dev_seg[cohort].isin(train_cohorts)]
-            test = dev_seg[dev_seg[cohort] == test_cohort]
-            target_rows = apply_seg[apply_seg[cohort] == test_cohort]
-            row = {
-                "segment": segment, "cohort": str(test_cohort), "train_cohorts": ",".join(map(str, train_cohorts)),
-                "train_rows": int(len(train)), "test_rows": int(len(test)), "apply_rows": int(len(target_rows)),
-                "brier_raw": None, "brier_calibrated": None,
-            }
-            if len(train) == 0 or train[target].nunique(dropna=True) < 2:
-                row["status"] = "нет данных для обучения"
-                report.append(row)
-                continue
-            if train[target].isna().any():
+    for preset in presets:
+        offsets = sorted(preset["train_offsets"])
+        first = -min(offsets)
+        fields = list(preset["segments"])
+        prefix = f"{preset['name']}: " if preset.get("name") else ""
+        for combo in itertools.product(*(preset["segments"][f] for f in fields)):
+            segment = prefix + " & ".join(f"{f}={v}" for f, v in zip(fields, combo))
+            dm = np.ones(len(dev), dtype=bool)
+            am = np.ones(len(apply), dtype=bool)
+            for f, v in zip(fields, combo):
+                dm &= mask(dev, f, v)
+                am &= mask(apply, f, v)
+            dev_seg, apply_seg = dev[dm], apply[am]
+            twice = taken[apply_seg.index]
+            twice = twice[twice != ""]
+            if len(twice):
                 raise ValueError(
-                    f"[scoring-kit] сегмент {segment}, когорта {test_cohort}: в обучающих когортах {train_cohorts} "
-                    f"пустой факт ({int(train[target].isna().sum())} строк). Отфильтруйте их в запросе dev "
-                    "или задайте calibrate.target_fill: 0"
+                    f"[scoring-kit] сегменты пересекаются: {len(twice)} строк apply попали и в «{twice.iloc[0]}», "
+                    f"и в «{segment}». Одна строка должна относиться к одному сегменту"
                 )
-            predict = fit(train[score].astype(float).to_numpy(), train[target].astype(float).to_numpy())
-            if len(test):
-                row["brier_raw"] = brier(test[target], test[score])
-                row["brier_calibrated"] = brier(test[target], predict(test[score].astype(float).to_numpy()))
-            scorable = target_rows[target_rows[score].notna()]
-            if len(scorable):
-                calibrated.loc[scorable.index] = predict(scorable[score].astype(float).to_numpy())
-            row["status"] = "ok"
-            report.append(row)
+            taken.loc[apply_seg.index] = segment
+            cohorts = sorted(dev_seg[cohort].dropna().unique())
+            print(f"[scoring-kit] сегмент {segment}: dev {len(dev_seg)} строк, когорт {len(cohorts)}, apply {len(apply_seg)}")
+            if len(cohorts) <= first:
+                report.append({
+                    "segment": segment, "cohort": None, "status": "мало когорт в dev", "train_cohorts": None,
+                    "train_rows": 0, "test_rows": 0, "apply_rows": int(len(apply_seg)),
+                    "brier_raw": None, "brier_calibrated": None,
+                })
+                continue
+            for i in range(first, len(cohorts)):
+                test_cohort = cohorts[i]
+                train_cohorts = [cohorts[i + o] for o in offsets]
+                train = dev_seg[dev_seg[cohort].isin(train_cohorts)]
+                test = dev_seg[dev_seg[cohort] == test_cohort]
+                target_rows = apply_seg[apply_seg[cohort] == test_cohort]
+                row = {
+                    "segment": segment, "cohort": str(test_cohort), "train_cohorts": ",".join(map(str, train_cohorts)),
+                    "train_rows": int(len(train)), "test_rows": int(len(test)), "apply_rows": int(len(target_rows)),
+                    "brier_raw": None, "brier_calibrated": None,
+                }
+                if len(train) == 0 or train[target].nunique(dropna=True) < 2:
+                    row["status"] = "нет данных для обучения"
+                    report.append(row)
+                    continue
+                if train[target].isna().any():
+                    raise ValueError(
+                        f"[scoring-kit] сегмент {segment}, когорта {test_cohort}: в обучающих когортах {train_cohorts} "
+                        f"пустой факт ({int(train[target].isna().sum())} строк). Отфильтруйте их в запросе dev "
+                        "или задайте calibrate.target_fill: 0"
+                    )
+                predict = fit(train[score].astype(float).to_numpy(), train[target].astype(float).to_numpy())
+                if len(test):
+                    row["brier_raw"] = brier(test[target], test[score])
+                    row["brier_calibrated"] = brier(test[target], predict(test[score].astype(float).to_numpy()))
+                scorable = target_rows[target_rows[score].notna()]
+                if len(scorable):
+                    calibrated.loc[scorable.index] = predict(scorable[score].astype(float).to_numpy())
+                row["status"] = "ok"
+                report.append(row)
 
     result = apply.copy()
+    covered = float(calibrated.notna().mean()) if len(calibrated) else 1.0
+    print(f"[scoring-kit] откалибровано {covered:.2%} строк apply")
     if cfg["uncalibrated"] == "copy_score":
         calibrated = calibrated.fillna(apply[score].astype(float))
     result[output] = calibrated
-    covered = float(calibrated.notna().mean()) if len(calibrated) else 1.0
-    print(f"[scoring-kit] откалибровано {covered:.2%} строк apply")
+    if cfg["uncalibrated"] == "drop":
+        # в результат идут только откалиброванные строки (как в ноутбуке калибровки)
+        result = result[calibrated.notna()]
     return result, pd.DataFrame(report)
 
 

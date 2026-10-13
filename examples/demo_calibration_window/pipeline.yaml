@@ -1,9 +1,10 @@
-# Калибровка в разрезе двух признаков со скользящим окном.
-# Повторяет логику ноутбука: duration_train = 4, delta_train_test = 1, когорта = месяц даты,
-# пустой факт у свежих когорт считается нулём.
+# Калибровка в разрезе двух признаков со скользящим окном разной длины.
+# Повторяет логику ноутбука с тремя пресетами: у разных продуктов разный duration_train,
+# delta_train_test = 1, когорта = месяц даты, пустой факт у свежих когорт считается нулём,
+# в результат идут только откалиброванные строки.
 recipe: fit_apply
 dag_id: demo_calibration_window
-description: Калибровка скора по продукту и признаку double со скользящим окном
+description: Калибровка скора по продукту и признаку double, у продуктов разное окно обучения
 owner: your.login
 domain: collection
 schedule: "0 10 * * *"
@@ -13,7 +14,7 @@ wait_for:
 
 dev:                             # скор и факт за прошлые периоды
   query: |
-    select account_rk, due_dt, score_30, target_30, financial_account_subtype_cd, double
+    select account_rk, due_dt, score_30, d2p2_target, financial_account_subtype_cd, double
     from sandbox.dg_dpd_calibration_dm
     where due_dt < current_date
 apply:                           # новые скоры, которые нужно откалибровать
@@ -30,18 +31,30 @@ job:
 calibrate:
   method: isotonic
   score: score_30
-  target: target_30
+  target: d2p2_target
   output: score_30_calib
-  segments:                      # поля перемножаются: 9 продуктовых сегментов x 3 значения double = 27
-    financial_account_subtype_cd: [CLN, REF, ALR, SLN, SCA, CAR, CLA, SCL, [MTG, MTF, MTB, MTP]]
-    double: [0, 1, 2]
+  presets:                       # у каждого набора сегментов своё окно; все пишут в один результат
+    - name: ccr
+      segments:
+        financial_account_subtype_cd: [CCR]
+        double: [0, 1, 2]
+      train_offsets: [-3, -2]            # обучение на 2 когортах, пропуск 1
+    - name: vkr
+      segments:
+        financial_account_subtype_cd: [VKR]
+        double: [0, 1, 2]
+      train_offsets: [-4, -3, -2]        # обучение на 3 когортах, пропуск 1
+    - name: other
+      segments:                  # поля перемножаются: 9 продуктовых сегментов x 3 значения double = 27
+        financial_account_subtype_cd: [CLN, REF, ALR, SLN, SCA, CAR, CLA, SCL, [MTG, MTF, MTB, MTP]]
+        double: [0, 1, 2]
+      train_offsets: [-5, -4, -3, -2]    # обучение на 4 когортах, пропуск 1
   cohort_column: cohort
   cohort_from:                   # когорта считается из даты, в запросах её нет
     column: due_dt
     truncate: month
   target_fill: 0                 # пустой факт в dev = 0
-  train_offsets: [-5, -4, -3, -2]    # обучение на 4 когортах, пропуск 1
-  uncalibrated: null
+  uncalibrated: drop             # неоткалиброванные строки в результат не пишутся
 
 sinks:
   - table: sandbox.score_30_dm_calib
@@ -51,6 +64,8 @@ sinks:
       due_dt: date
       score_30: numeric
       score_30_calib: numeric
+      financial_account_subtype_cd: varchar
+      double: int
   - table: sandbox.score_30_calib_report_hist
     data: report
     mode: append

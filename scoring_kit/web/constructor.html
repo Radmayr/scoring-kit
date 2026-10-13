@@ -144,6 +144,8 @@ details.help { border: 1px solid var(--line); border-radius: 10px; padding: 10px
 details.help summary { cursor: pointer; font-weight: 500; font-size: 14px; color: var(--ours); }
 details.help p { font-size: 13.5px; margin-block: 8px; }
 details.help pre.yaml { background: var(--surface); max-height: none; }
+.preset-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.preset-card > .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .step h3 { font: 600 14.5px/1.3 var(--font-body); margin-top: 6px; }
 .example-note { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ours-soft); color: var(--ink); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -312,7 +314,7 @@ function defaultState() {
     multi: {image: firstPreset("model"), customImage: "", customReq: "", outputKind: "proba", float32: true,
       models: [newModel(), newModel()]},
     calib: {devQuery: "", applyQuery: "", applyKey: "", score: "", target: "", output: "", method: "isotonic",
-      segs: [newSegment()], duration: 2, gap: 1, rawOffsets: null,
+      presets: [newPreset()],
       cohortMode: "column", cohort: "cohort", cohortDate: "due_dt", cohortTrunc: "month", targetFill: false,
       uncal: "null", job: firstPreset("job"), customImage: "", customReq: ""},
     spark: firstPreset("spark"), customSpark: "",
@@ -459,6 +461,11 @@ function rest(obj, handled) {
 var NUMBER = /^-?\d+(\.\d+)?$/;
 var TRUNCATIONS = [["month", "месяца"], ["week", "недели"], ["quarter", "квартала"], ["day", "дня"], ["year", "года"]];
 function newSegment() { return {field: "", values: "", numeric: false}; }
+// Пресет — набор сегментов со своим окном обучения. Обычно он один; несколько нужны,
+// когда у разных сегментов разная длина окна. Все пресеты пишут в один результат.
+function newPreset() { return {name: "", segs: [newSegment()], duration: 2, gap: 1, rawOffsets: null}; }
+function presetName(preset, i) { return preset.name || "preset_" + (i + 1); }
+function calibSegments(c) { return c.presets.reduce(function (n, preset) { return n + segmentCount(preset); }, 0); }
 // Значения одного поля сегмента: строка — одно значение, несколько через запятую в строке — группа.
 function segTokens(seg) {
   return String(seg.values || "").split("\n").map(function (line) {
@@ -500,7 +507,13 @@ function migrateState(st) {
     if (!isNaN(a) && !isNaN(b) && Math.max(a, b) < 0) { c.duration = Math.abs(a - b) + 1; c.gap = -Math.max(a, b) - 1; }
     delete c.from; delete c.to;
   }
-  if (!c.segs || !c.segs.length) c.segs = [newSegment()];
+  if (c.segs !== undefined) {
+    // версия с одним набором сегментов на всю калибровку
+    c.presets = [{name: "", segs: c.segs.length ? c.segs : [newSegment()], duration: c.duration === undefined ? 2 : c.duration,
+      gap: c.gap === undefined ? 1 : c.gap, rawOffsets: c.rawOffsets || null}];
+    delete c.segs; delete c.duration; delete c.gap; delete c.rawOffsets;
+  }
+  if (!c.presets || !c.presets.length) c.presets = [newPreset()];
   return st;
 }
 function scenarioTitle(r) {
@@ -549,15 +562,30 @@ function buildYaml(st) {
       ["  key: " + list(words(c.applyKey))], kept("apply", 2)).join("\n"));
     var job = imageOf(c.job, c.customImage, c.customReq);
     out.push(["job:", "  image: " + q(job.image), "  requirements: " + list(job.requirements)].concat(fl("job", 2), kept("job", 2)).join("\n"));
-    var cal = ["calibrate:", "  method: " + c.method, "  score: " + q(c.score), "  target: " + q(c.target), "  output: " + q(c.output),
-      "  segments:"].concat(c.segs.map(function (seg, i) {
-        return "    " + (seg.field || "segment" + (i ? i + 1 : "")) + ": " + list(segTokens(seg));
-      }), ["  cohort_column: " + q(c.cohort || "cohort")]);
+    var segLines = function (preset, indent) {
+      return preset.segs.map(function (seg, i) {
+        return pad(indent) + (seg.field || "segment" + (i ? i + 1 : "")) + ": " + list(segTokens(seg));
+      });
+    };
+    var offsetsLine = function (preset, indent) {
+      var w = windowParts(preset);
+      return pad(indent) + "train_offsets: " + list(calibOffsets(preset)) +
+        (preset.rawOffsets ? "" : "    # обучение на " + w.duration + " когортах, пропуск " + w.gap);
+    };
+    var single = c.presets.length === 1;
+    var cal = ["calibrate:", "  method: " + c.method, "  score: " + q(c.score), "  target: " + q(c.target), "  output: " + q(c.output)];
+    if (single) cal = cal.concat(["  segments:"], segLines(c.presets[0], 4));
+    else {
+      cal.push("  presets:    # у каждого набора сегментов своё окно; все пишут в один результат");
+      c.presets.forEach(function (preset, i) {
+        cal = cal.concat(["    - name: " + q(presetName(preset, i)), "      segments:"], segLines(preset, 8), [offsetsLine(preset, 6)]);
+      });
+    }
+    cal.push("  cohort_column: " + q(c.cohort || "cohort"));
     if (c.cohortMode === "date") cal.push("  cohort_from:", "    column: " + q(c.cohortDate), "    truncate: " + c.cohortTrunc);
     if (c.targetFill) cal.push("  target_fill: 0");
-    var w = windowParts(c);
-    cal.push("  train_offsets: " + list(calibOffsets(c)) + (c.rawOffsets ? "" : "    # обучение на " + w.duration + " когортах, пропуск " + w.gap),
-      "  uncalibrated: " + (c.uncal === "copy_score" ? "copy_score" : "null"));
+    if (single) cal.push(offsetsLine(c.presets[0], 2));
+    cal.push("  uncalibrated: " + (c.uncal === "copy_score" || c.uncal === "drop" ? c.uncal : "null"));
     out.push(cal.concat(kept("calibrate", 2)).join("\n"));
   } else {
     var src = ["source:"];
@@ -643,20 +671,29 @@ function validate(st) {
     [["score", "колонка скора", "pre_score"], ["target", "колонка факта", "pre_target"], ["output", "колонка результата", "pre_score_calib"],
      c.cohortMode === "date" ? ["cohortDate", "колонка с датой для когорты", "due_dt"] : ["cohort", "колонка когорты", "cohort"]]
       .forEach(function (x) { if (!IDENT.test(c[x[0]] || "")) add(4, "Калибровка: " + x[1] + " — латиницей, например " + x[2] + "."); });
-    var segFields = [];
-    c.segs.forEach(function (seg, i) {
-      var n = c.segs.length > 1 ? "Поле сегмента " + (i + 1) + ": " : "Сегменты: ";
-      if (!IDENT.test(seg.field || "")) add(4, n + "название колонки латиницей, например product_cd.");
-      if (!segTokens(seg).length) add(4, n + "перечислите значения — по одному на строку.");
-      if (seg.numeric && words(seg.values).some(function (t) { return !NUMBER.test(t); })) add(4, n + "отмечено, что значения — числа, но среди них есть текст.");
-      if (seg.field) segFields.push(seg.field);
+    var presetNames = [];
+    c.presets.forEach(function (preset, pi) {
+      var many = c.presets.length > 1, who = many ? "Набор сегментов " + (pi + 1) + ": " : "";
+      if (many) {
+        if (!IDENT.test(presetName(preset, pi))) add(4, who + "название латиницей, например ccr.");
+        presetNames.push(presetName(preset, pi));
+      }
+      var segFields = [];
+      preset.segs.forEach(function (seg, i) {
+        var n = who + (preset.segs.length > 1 ? "поле сегмента " + (i + 1) + " — " : (many ? "" : "Сегменты: "));
+        if (!IDENT.test(seg.field || "")) add(4, n + "название колонки латиницей, например product_cd.");
+        if (!segTokens(seg).length) add(4, n + "перечислите значения — по одному на строку.");
+        if (seg.numeric && words(seg.values).some(function (t) { return !NUMBER.test(t); })) add(4, n + "отмечено, что значения — числа, но среди них есть текст.");
+        if (seg.field) segFields.push(seg.field);
+      });
+      if (uniq(segFields).length !== segFields.length) add(4, who + "поля сегментов повторяются.");
+      if (!preset.rawOffsets) {
+        var win = windowParts(preset);
+        if (win.duration < 1) add(4, who + "в окне обучения нужна хотя бы одна когорта.");
+        if (win.gap < 0) add(4, who + "пропуск в окне не может быть отрицательным.");
+      }
     });
-    if (uniq(segFields).length !== segFields.length) add(4, "Поля сегментов повторяются.");
-    if (!c.rawOffsets) {
-      var win = windowParts(c);
-      if (win.duration < 1) add(4, "Окно обучения: нужна хотя бы одна когорта.");
-      if (win.gap < 0) add(4, "Окно обучения: пропуск не может быть отрицательным.");
-    }
+    if (uniq(presetNames).length !== presetNames.length) add(4, "Названия наборов сегментов повторяются.");
     if (imageOf(c.job, c.customImage, c.customReq).image === "") add(4, "Выберите окружение для калибровки.");
     if (st.report.enabled && !TABLE.test(st.report.table)) add(5, "Таблица отчёта: вид schema.table.");
   } else {
@@ -724,7 +761,8 @@ function previewTasks(st) {
   if (wait.length) t.push(["wait", "wait_source", "ждём обновления: " + wait.join(", ")]);
   if (st.recipe === "calib") {
     t.push(["check", "read_dev · read_apply", "две выборки + проверки"]);
-    t.push(["plat", "fit_apply", "калибровка: сегментов " + segmentCount(st.calib) + ", обучение на " + calibOffsets(st.calib).length + " когортах"]);
+    t.push(["plat", "fit_apply", "калибровка: сегментов " + calibSegments(st.calib) + ", окно обучения: " +
+      uniq(st.calib.presets.map(function (x) { return String(calibOffsets(x).length); })).join(" / ") + " когорт"]);
     t.push(["ours", "write → " + sink, "калиброванный скор " + (st.calib.output || "")]);
     if (st.report.enabled) t.push(["data", "write → " + (st.report.table || "отчёт"), "отчёт: объёмы и Brier по ячейкам"]);
     return t;
@@ -819,26 +857,32 @@ function fromConfig(cfg) {
   if (cfg.recipe === "fit_apply") {
     var cb = cfg.calibrate || {}, segs = cb.segments || {};
     var ji = pick(cfg.job && cfg.job.image, cfg.job && cfg.job.requirements, "job");
-    var offs = (cb.train_offsets || [-3, -2]).slice().sort(function (x, y) { return x - y; });
-    var contiguous = offs.every(function (o, i) { return i === 0 || o === offs[i - 1] + 1; }) && offs[offs.length - 1] < 0;
     var cf = cb.cohort_from, fromDate = !!(cf && cf.column);
-    var segList = Object.keys(segs).map(function (f) {
-      var values = segs[f] || [];
-      return {field: f, values: values.map(function (v) { return Array.isArray(v) ? v.join(", ") : v; }).join("\n"),
-        numeric: values.length > 0 && JSON.stringify(values).indexOf('"') < 0};
-    });
+    var toPreset = function (name, segments, offsets) {
+      var offs = (offsets || [-3, -2]).slice().sort(function (x, y) { return x - y; });
+      var contiguous = offs.every(function (o, i) { return i === 0 || o === offs[i - 1] + 1; }) && offs[offs.length - 1] < 0;
+      var segList = Object.keys(segments || {}).map(function (f) {
+        var values = segments[f] || [];
+        return {field: f, values: values.map(function (v) { return Array.isArray(v) ? v.join(", ") : v; }).join("\n"),
+          numeric: values.length > 0 && JSON.stringify(values).indexOf('"') < 0};
+      });
+      return {name: name || "", segs: segList.length ? segList : [newSegment()], duration: contiguous ? offs.length : 2,
+        gap: contiguous ? -offs[offs.length - 1] - 1 : 1, rawOffsets: contiguous ? null : offsets};
+    };
+    var presetList = cb.presets && cb.presets.length
+      ? cb.presets.map(function (x) { return toPreset(x.name, x.segments, x.train_offsets || cb.train_offsets); })
+      : [toPreset("", segs, cb.train_offsets)];
     st.calib = {devQuery: (cfg.dev || {}).query || "", applyQuery: (cfg.apply || {}).query || "",
       applyKey: ((cfg.apply || {}).key || []).join(", "), score: cb.score || "", target: cb.target || "", output: cb.output || "",
-      method: cb.method || "isotonic", segs: segList.length ? segList : [newSegment()],
-      duration: contiguous ? offs.length : 2, gap: contiguous ? -offs[offs.length - 1] - 1 : 1, rawOffsets: contiguous ? null : cb.train_offsets,
+      method: cb.method || "isotonic", presets: presetList,
       cohortMode: fromDate ? "date" : "column", cohort: cb.cohort_column || "cohort", cohortDate: fromDate ? cf.column : "due_dt",
       cohortTrunc: (fromDate && cf.truncate) || "month", targetFill: cb.target_fill === 0,
-      uncal: cb.uncalibrated === "copy_score" ? "copy_score" : "null", job: ji.id, customImage: ji.custom, customReq: ji.req};
+      uncal: cb.uncalibrated === "copy_score" || cb.uncalibrated === "drop" ? cb.uncalibrated : "null", job: ji.id, customImage: ji.custom, customReq: ji.req};
     flavors.dev = (cfg.dev || {}).flavor; flavors.apply = (cfg.apply || {}).flavor; flavors.job = (cfg.job || {}).flavor;
     keep.dev = rest(cfg.dev, ["query", "flavor"]);
     keep.apply = rest(cfg.apply, ["query", "flavor", "key"]);
     keep.job = rest(cfg.job, ["image", "requirements", "flavor"]);
-    var calHandled = ["method", "score", "target", "output", "segments", "cohort_column", "uncalibrated", "train_offsets"];
+    var calHandled = ["method", "score", "target", "output", "segments", "presets", "cohort_column", "uncalibrated", "train_offsets"];
     if (fromDate || cf === null) calHandled.push("cohort_from");
     if (cb.target_fill === 0 || cb.target_fill === null) calHandled.push("target_fill");
     keep.calibrate = rest(cb, calHandled);
@@ -1079,32 +1123,45 @@ function renderForm() {
           select("calib.cohortTrunc", "Когорта — это начало", TRUNCATIONS, {hint: "Как date_trunc в SQL: все даты месяца попадают в одну когорту."})
         : input("calib.cohort", "Колонка когорты", {ph: "cohort", hint: "Должна быть и в dev, и в apply."})) + "</div>";
 
-    m += "<h3>Сегменты</h3>";
-    state.calib.segs.forEach(function (seg, i) {
-      var p = "calib.segs." + i;
-      m += '<div class="model-card"><div class="row"><b>Поле сегмента ' + (i + 1) + "</b>" +
-        (state.calib.segs.length > 1 ? '<button type="button" class="link" data-remove-seg="' + i + '">Убрать</button>' : "") + "</div>" +
-        input(p + ".field", "Колонка", {ph: i ? "double" : "financial_account_subtype_cd", rerender: true}) +
-        input(p + ".values", "Значения — по одному на строку", {textarea: true, short: true, rerender: true, ph: i ? "0\n1\n2" : "CLN\nREF\nMTG, MTF, MTB, MTP",
-          hint: "Несколько значений в одной строке через запятую — одна группа: калибруется вместе."}) +
-        checkbox(p + ".numeric", "В данных это числа, а не текст") + "</div>";
+    m += "<h3>Сегменты и окно обучения</h3>";
+    var manyPresets = state.calib.presets.length > 1;
+    state.calib.presets.forEach(function (preset, pi) {
+      var pp = "calib.presets." + pi;
+      m += '<div class="preset-card">';
+      if (manyPresets) {
+        m += '<div class="row"><b>Набор сегментов ' + (pi + 1) + '</b><button type="button" class="link" data-remove-preset="' + pi + '">Убрать набор</button></div>' +
+          input(pp + ".name", "Название набора", {ph: "ccr", hint: "Латиницей. Попадёт в отчёт калибровки."});
+      }
+      preset.segs.forEach(function (seg, i) {
+        var sp = pp + ".segs." + i;
+        m += '<div class="model-card"><div class="row"><b>Поле сегмента ' + (i + 1) + "</b>" +
+          (preset.segs.length > 1 ? '<button type="button" class="link" data-remove-seg="' + pi + "." + i + '">Убрать</button>' : "") + "</div>" +
+          input(sp + ".field", "Колонка", {ph: i ? "double" : "financial_account_subtype_cd", rerender: true}) +
+          input(sp + ".values", "Значения — по одному на строку", {textarea: true, short: true, rerender: true, ph: i ? "0\n1\n2" : "CLN\nREF\nMTG, MTF, MTB, MTP",
+            hint: "Несколько значений в одной строке через запятую — одна группа: калибруется вместе."}) +
+          checkbox(sp + ".numeric", "В данных это числа, а не текст") + "</div>";
+      });
+      m += '<div><button type="button" class="small" data-add-seg="' + pi + '">+ Поле сегмента</button></div>';
+      var total = segmentCount(preset);
+      m += '<p class="hint">' + (preset.segs.length > 1
+        ? "Поля перемножаются: каждое значение одного поля с каждым значением другого. Получается сегментов: " + total + ". У каждого свой калибратор."
+        : "Сегментов: " + total + ". У каждого свой калибратор. Добавьте второе поле, если калибровать нужно в разрезе двух признаков.") + "</p>";
+      if (preset.rawOffsets) {
+        m += '<p class="hint">Окно задано в конфиге списком сдвигов: ' + esc(preset.rawOffsets.join(", ")) + ". " + esc(windowText(preset)) +
+          '</p><div><button type="button" class="small" data-reset-window="' + pi + '">Задать длиной и пропуском</button></div>';
+      } else {
+        m += '<div class="grid2">' + input(pp + ".duration", "Сколько когорт в обучении", {type: "number", rerender: true, hint: "В вашем коде это duration_train."}) +
+          input(pp + ".gap", "Сколько когорт пропустить перед текущей", {type: "number", rerender: true, hint: "В вашем коде это delta_train_test. Пропуск нужен, чтобы факт успел созреть."}) + "</div>";
+        m += '<p class="hint">' + esc(windowText(preset)) + " T — когорта, которую калибруем; когорты считаются по порядку внутри сегмента.</p>";
+      }
+      m += "</div>";
     });
-    var segTotal = segmentCount(state.calib);
-    m += '<div><button type="button" class="small" data-add-seg="1">+ Поле сегмента</button></div>';
-    m += '<p class="hint">' + (state.calib.segs.length > 1
-      ? "Поля перемножаются: каждое значение одного поля с каждым значением другого. Сейчас получается сегментов: " + segTotal + ". У каждого свой калибратор."
-      : "Сейчас сегментов: " + segTotal + ". У каждого свой калибратор. Добавьте второе поле, если калибровать нужно в разрезе двух признаков.") + "</p>";
-
-    m += "<h3>Окно обучения</h3>";
-    if (state.calib.rawOffsets) {
-      m += '<p class="hint">Окно задано в конфиге списком сдвигов: ' + esc(state.calib.rawOffsets.join(", ")) + ". " + esc(windowText(state.calib)) +
-        '</p><div><button type="button" class="small" data-reset-window="1">Задать длиной и пропуском</button></div>';
-    } else {
-      m += '<div class="grid2">' + input("calib.duration", "Сколько когорт в обучении", {type: "number", rerender: true, hint: "В вашем коде это duration_train."}) +
-        input("calib.gap", "Сколько когорт пропустить перед текущей", {type: "number", rerender: true, hint: "В вашем коде это delta_train_test. Пропуск нужен, чтобы факт успел созреть."}) + "</div>";
-      m += '<p class="hint">' + esc(windowText(state.calib)) + " T — когорта, которую калибруем; когорты считаются по порядку внутри сегмента.</p>";
-    }
-    m += select("calib.uncal", "Если строку не удалось откалибровать", [["null", "Оставить пустой"], ["copy_score", "Записать исходный скор"]]);
+    m += '<div><button type="button" class="small" data-add-preset="1">+ Набор сегментов с другим окном</button></div>';
+    m += '<p class="hint">' + (manyPresets
+      ? "Всего сегментов: " + calibSegments(state.calib) + ". Все наборы пишут в одну таблицу. Одна строка должна попадать только в один набор, иначе процесс остановится."
+      : "Если у разных сегментов разная длина окна (в вашем коде это разные пресеты), добавьте для них отдельные наборы. Все пишут в одну таблицу.") + "</p>";
+    m += select("calib.uncal", "Если строку не удалось откалибровать", [["null", "Записать строку с пустым калиброванным скором"], ["copy_score", "Записать исходный скор"], ["drop", "Не писать строку в результат"]],
+      {hint: "Не калибруются строки вне перечисленных сегментов, без скора и из когорт, для которых ещё нет окна обучения."});
     m += imageSelect("calib.job", "job", "Окружение калибровки", "calib.customImage", "calib.customReq");
   }
   html.push(m + "</section>");
@@ -1211,9 +1268,20 @@ form.addEventListener("click", function (e) {
     refresh(); return;
   }
   if (b.dataset.addModel) { state.multi.models.push(newModel()); renderForm(); return; }
-  if (b.dataset.addSeg) { state.calib.segs.push(newSegment()); renderForm(); return; }
-  if (b.dataset.removeSeg) { state.calib.segs.splice(Number(b.dataset.removeSeg), 1); renderForm(); return; }
-  if (b.dataset.resetWindow) { state.calib.rawOffsets = null; renderForm(); return; }
+  if (b.dataset.addSeg) { state.calib.presets[Number(b.dataset.addSeg)].segs.push(newSegment()); renderForm(); return; }
+  if (b.dataset.removeSeg) {
+    var at = b.dataset.removeSeg.split(".");
+    state.calib.presets[Number(at[0])].segs.splice(Number(at[1]), 1); renderForm(); return;
+  }
+  if (b.dataset.resetWindow) { state.calib.presets[Number(b.dataset.resetWindow)].rawOffsets = null; renderForm(); return; }
+  if (b.dataset.addPreset) {
+    // новый набор — копия последнего: обычно меняются только значения одного поля и длина окна
+    var last = state.calib.presets[state.calib.presets.length - 1];
+    var copy = JSON.parse(JSON.stringify(last));
+    copy.name = "";
+    state.calib.presets.push(copy); renderForm(); return;
+  }
+  if (b.dataset.removePreset) { state.calib.presets.splice(Number(b.dataset.removePreset), 1); renderForm(); return; }
   if (b.dataset.removeModel) { state.multi.models.splice(Number(b.dataset.removeModel), 1); renderForm(); return; }
   if (b.dataset.addCol) { state.sink.columns.push({name: "", type: "varchar"}); renderForm(); return; }
   if (b.dataset.paste) {

@@ -180,10 +180,10 @@ def fit_apply(b: DagBuilder, p: Pipeline) -> None:
     cfg = p.calibrate
     # Когорта либо приходит из запроса, либо считается из даты: тогда из запроса нужна дата.
     cohort_source = cfg.cohort_from.column if cfg.cohort_from else cfg.cohort_column
-    dev_required = list(dict.fromkeys([cfg.score, cfg.target, cohort_source, *cfg.segments]))
+    dev_required = list(dict.fromkeys([cfg.score, cfg.target, cohort_source, *cfg.segment_fields]))
     produced = {cfg.output} | ({cfg.cohort_column} if cfg.cohort_from else set())
     passthrough = [c for s in p.sinks if s.data == "result" for c in s.columns if c not in produced]
-    apply_required = list(dict.fromkeys([cfg.score, cohort_source, *cfg.segments, *p.apply.key, *passthrough]))
+    apply_required = list(dict.fromkeys([cfg.score, cohort_source, *cfg.segment_fields, *p.apply.key, *passthrough]))
     dev = blocks.gp_read(b, p, "read_dev", p.dev.query, p.dev.flavor, p.dev.min_rows, dev_required, [])
     apply = blocks.gp_read(b, p, "read_apply", p.apply.query, p.apply.flavor, p.apply.min_rows, apply_required, p.apply.key)
     if first:

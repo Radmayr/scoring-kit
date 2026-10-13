@@ -114,14 +114,21 @@ s.multi.models = [{name: "m1", mrid: "t/m1/2", score: "s1", packed: true, featur
 emit("t_multi_packed", s);
 s = A.defaultState(); s.recipe = "calib"; Object.assign(s, {name: "t_calib", owner: "u"});
 Object.assign(s.calib, {devQuery: "select 1", applyQuery: "select 2", applyKey: "id", score: "p", target: "y", output: "p_cal",
-  segs: [{field: "seg", values: "1\n2, 3", numeric: true}]});
+  presets: [{name: "", segs: [{field: "seg", values: "1\n2, 3", numeric: true}], duration: 2, gap: 1, rawOffsets: null}]});
 s.sink.table = "s.t_calib"; s.report.table = "s.t_calib_report"; emit("t_calib", s);
 // как в ноутбуке: два поля сегментов, 4 когорты с пропуском 1, когорта из даты, пустой факт = 0
 s.name = "t_calib_window"; s.sink.table = "s.t_calib_window"; s.report.table = "s.t_calib_window_report";
-Object.assign(s.calib, {segs: [{field: "product_cd", values: "CLN\nREF\nMTG, MTF, MTB, MTP", numeric: false},
-                               {field: "double", values: "0\n1\n2", numeric: true}],
-  duration: 4, gap: 1, cohortMode: "date", cohortDate: "due_dt", cohortTrunc: "month", targetFill: true});
+const dbl = {field: "double", values: "0\n1\n2", numeric: true};
+Object.assign(s.calib, {presets: [{name: "", segs: [{field: "product_cd", values: "CLN\nREF\nMTG, MTF, MTB, MTP", numeric: false}, dbl],
+                                   duration: 4, gap: 1, rawOffsets: null}],
+  cohortMode: "date", cohortDate: "due_dt", cohortTrunc: "month", targetFill: true});
 emit("t_calib_window", s);
+// три пресета из ноутбука: у продуктов разная длина окна, результат один
+s.name = "t_calib_presets"; s.sink.table = "s.t_calib_presets"; s.report.table = "s.t_calib_presets_report";
+s.calib.uncal = "drop";
+s.calib.presets = [["ccr", "CCR", 2], ["vkr", "VKR", 3], ["other", "CLN\nREF\nMTG, MTF, MTB, MTP", 4]].map(x => (
+  {name: x[0], segs: [{field: "product_cd", values: x[1], numeric: false}, dbl], duration: x[2], gap: 1, rawOffsets: null}));
+emit("t_calib_presets", s);
 for (const f of fs.readdirSync(path.join(work, "in"))) {
   emit("import_" + f.replace(".json", ""), A.fromConfig(JSON.parse(fs.readFileSync(path.join(work, "in", f), "utf8"))));
 }
@@ -204,6 +211,13 @@ def test_form_logic_builds_valid_and_lossless_configs(tmp_path):
     assert window.cohort_from.column == "due_dt" and window.cohort_from.truncate == "month"
     assert window.target_fill == 0
     render_dir(tmp_path / "out" / "t_calib_window")
+    presets = load_pipeline(tmp_path / "out" / "t_calib_presets").calibrate
+    assert presets.segments is None and presets.uncalibrated == "drop"
+    assert [(p["name"], p["train_offsets"]) for p in presets.resolved_presets] == [
+        ("ccr", [-3, -2]), ("vkr", [-4, -3, -2]), ("other", [-5, -4, -3, -2])]
+    assert presets.resolved_presets[2]["segments"] == {
+        "product_cd": ["CLN", "REF", ["MTG", "MTF", "MTB", "MTP"]], "double": [0, 1, 2]}
+    render_dir(tmp_path / "out" / "t_calib_presets")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
