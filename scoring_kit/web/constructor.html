@@ -125,6 +125,9 @@ textarea.short { min-height: 64px; }
 .t-wait i { background: var(--wait); } .t-check i { background: var(--check); } .t-plat i { background: var(--platform); }
 .t-ours i { background: var(--ours); } .t-data i { background: var(--data); }
 
+.pgroups { display: grid; gap: 12px; }
+.pgroup { display: grid; gap: 4px; }
+.pgroup button { justify-self: start; font-weight: 600; font-size: 13.5px; color: var(--check); text-align: left; }
 .problems { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
 .problems li::marker { color: var(--check); }
 .allgood { color: var(--ok); font-weight: 500; font-size: 14px; }
@@ -574,6 +577,10 @@ function migrateState(st) {
   });
   return st;
 }
+function stepTitles(st) {
+  return {1: "Что делаем", 2: "Процесс и расписание", 3: "Данные",
+    4: st.recipe === "calib" ? "Калибровка" : st.recipe === "multi" ? "Модели" : "Модель", 5: "Куда писать результат"};
+}
 function scenarioTitle(r) {
   return {single: "одна модель", dlh: "одна модель на DLH", multi: "несколько моделей", calib: "калибровка"}[r];
 }
@@ -811,7 +818,9 @@ function validate(st) {
   var repeated = uniq(colNames.filter(function (n, i) { return n && colNames.indexOf(n) !== i; }));
   repeated.forEach(function (n) { add(5, "Колонка «" + n + "» указана в результате несколько раз — оставьте одну строку."); });
   if (st.recipe === "dlh" && colNames.indexOf("processed_dttm") >= 0) add(5, "processed_dttm добавляет оператор DLH — уберите её из колонок.");
-  return p;
+  var seen = {};
+  return p.filter(function (x) { var k = x.step + "|" + x.text; if (seen[k]) return false; seen[k] = 1; return true; })
+    .sort(function (a, b) { return a.step - b.step; });
 }
 
 // --- схема процесса: те же таски, что соберёт фабрика
@@ -1215,7 +1224,8 @@ function stepHead(n, title) {
 function renderForm() {
   var r = state.recipe, html = [];
 
-  html.push('<section class="step">' + stepHead(1, "Что делаем") + '<div class="scenarios">' +
+  var titles = stepTitles(state);
+  html.push('<section class="step">' + stepHead(1, titles[1]) + '<div class="scenarios">' +
     [["single", "Одна модель", "Модель из реестра → скор в витрину Greenplum"],
      ["multi", "Несколько моделей", "Несколько скоров в одну витрину по одной выборке"],
      ["calib", "Калибровка", "Каждый день учимся на свежем окне и применяем к новым данным"],
@@ -1226,7 +1236,7 @@ function renderForm() {
   var sizes = Object.keys(SIZES).map(function (k) { return [k, SIZES[k].label]; });
   if (state.size === "keep") sizes.push(["keep", "как в исходном процессе"]);
   var kept = keptSections(state);
-  html.push('<section class="step">' + stepHead(2, "Процесс и расписание") + '<div class="grid2">' +
+  html.push('<section class="step">' + stepHead(2, titles[2]) + '<div class="grid2">' +
     input("name", "Имя процесса", {ph: "bankrupt_score", hint: "Латиницей: станет именем DAG'а в Airflow."}) +
     input("owner", "Владелец", {ph: "i.ivanov", hint: "Логин того, кто отвечает за процесс."}) + "</div>" +
     input("description", "Что считает процесс", {ph: "Вероятность банкротства клиентов на стадии 30+"}) +
@@ -1244,7 +1254,7 @@ function renderForm() {
     (kept.length ? '<p class="hint">Из исходного конфига сохранены настройки, которых нет в форме: ' + esc(kept.join(", ")) + ". Они попадут в итоговый конфиг без изменений.</p>" : "") +
     "</section>");
 
-  var data = '<section class="step">' + stepHead(3, "Данные");
+  var data = '<section class="step">' + stepHead(3, titles[3]);
   if (r === "calib") {
     data += input("calib.devQuery", "Dev-выборка: скор и факт за прошлые периоды", {textarea: true, ph: "select account_rk, due_dt, pre_score, pre_target, product_cd\nfrom usr_schema.dev_calib_in\nwhere due_dt < current_date",
       hint: "На ней калибратор обучается. Нужны: скор, факт, поля сегментов и дата или готовая когорта. Строки без скора в расчёт не берутся."}) +
@@ -1264,7 +1274,7 @@ function renderForm() {
   }
   html.push(data + "</section>");
 
-  var m = '<section class="step">' + stepHead(4, r === "calib" ? "Калибровка" : r === "multi" ? "Модели" : "Модель");
+  var m = '<section class="step">' + stepHead(4, titles[4]);
   if (r === "single" || r === "dlh") {
     m += input("model.mrid", "Ссылка на модель в Model Registry", {ph: "team/model_name/1.0.0",
       hint: "Скопируйте из интерфейса Model Registry, версию указывайте явно."});
@@ -1361,7 +1371,7 @@ function renderForm() {
   }
   html.push(m + "</section>");
 
-  var s = '<section class="step">' + stepHead(5, "Куда писать результат");
+  var s = '<section class="step">' + stepHead(5, titles[5]);
   s += '<div class="grid2">' + input("sink.table", r === "dlh" ? "Таблица в DLH" : "Таблица в Greenplum", {ph: "usr_schema.my_process_scores"}) +
     (r === "dlh" ? '<div class="field"><span>Режим</span><small>Таблица DLH пересоздаётся целиком при каждом запуске.</small></div>'
       : select("sink.mode", "Режим", [["replace", "Заменять содержимое"], ["append", "Дописывать (история)"]])) + "</div>";
@@ -1408,8 +1418,13 @@ function refresh() {
   document.getElementById("preview").innerHTML = previewTasks(state).map(function (t) {
     return '<div class="task t-' + t[0] + '"><i></i><div><b>' + esc(t[1]) + "</b><small>" + esc(t[2]) + "</small></div></div>";
   }).join("") + '<p class="hint">Запуск: ' + esc(scheduleText(state.schedule)) + "</p>";
+  // Замечания сгруппированы по шагам формы: название шага ведёт к нему.
+  var titles = stepTitles(state), steps = uniq(pr.map(function (p) { return p.step; })).sort();
   document.getElementById("problems").innerHTML = pr.length
-    ? '<ol class="problems">' + pr.map(function (p) { return "<li>Шаг " + p.step + ": " + esc(p.text) + "</li>"; }).join("") + "</ol>"
+    ? '<div class="pgroups">' + steps.map(function (n) {
+        return '<div class="pgroup"><button type="button" class="link" data-goto="' + n + '">Шаг ' + n + ". " + esc(titles[n]) + '</button><ul class="problems">' +
+          pr.filter(function (p) { return p.step === n; }).map(function (p) { return "<li>" + esc(p.text) + "</li>"; }).join("") + "</ul></div>";
+      }).join("") + "</div>"
     : '<p class="allgood">Всё заполнено — конфиг можно отправлять.</p>';
   document.getElementById("yaml").textContent = buildYaml(state);
   document.querySelectorAll("[data-badge]").forEach(function (badge) {
@@ -1503,6 +1518,12 @@ form.addEventListener("click", function (e) {
   if (b.dataset.removeCol) { state.sink.columns.splice(Number(b.dataset.removeCol), 1); renderForm(); return; }
 });
 
+document.getElementById("problems").addEventListener("click", function (e) {
+  var b = e.target.closest("[data-goto]");
+  if (!b) return;
+  var badge = document.querySelector('[data-badge="' + b.getAttribute("data-goto") + '"]');
+  if (badge) badge.closest("section").scrollIntoView({behavior: "smooth", block: "start"});
+});
 document.getElementById("btn-copy").addEventListener("click", function () {
   var pre = document.getElementById("yaml"), status = document.getElementById("copy-status");
   var problems = validate(state).length;

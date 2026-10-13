@@ -1,0 +1,438 @@
+<title>Варианты конструктора</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Три макета одного экрана в рамках-«окнах»; переключаются вкладками сверху.
+   Палитра и шрифты те же, что у конструктора и схем фабрики: сравнивается раскладка, а не цвет.
+   Цвет блоков кодирует роль шага процесса: ожидание, проверка, платформа, наш слой, данные. */
+:root {
+  --bg: #F3F5F2;
+  --surface: #FFFFFF;
+  --sunken: #EEF1EC;
+  --ink: #18212B;
+  --muted: #5A6572;
+  --line: #D6DBD3;
+  --ours: #2453B8;
+  --ours-soft: #E6ECF8;
+  --platform: #1C7F55;
+  --data: #A86A12;
+  --wait: #6F52A0;
+  --check: #B4421A;
+  --ok: #1C7F55;
+  --font-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --font-body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10151B; --surface: #18202A; --sunken: #121921; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+    --ours: #82A6FF; --ours-soft: #1D2A44; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60; --ok: #4FC38F;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10151B; --surface: #18202A; --sunken: #121921; --ink: #E4E9EE; --muted: #98A3AF; --line: #2A3440;
+  --ours: #82A6FF; --ours-soft: #1D2A44; --platform: #4FC38F; --data: #E2A951; --wait: #B79BE8; --check: #F08A60; --ok: #4FC38F;
+  color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body); }
+.page { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 36px 72px; display: grid; gap: 28px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font: 700 clamp(24px, 4vw, 36px)/1.15 var(--font-display); letter-spacing: -0.01em; }
+h2 { font: 600 20px/1.3 var(--font-body); }
+h3 { font: 600 15px/1.3 var(--font-body); }
+p { margin: 0; max-width: 70ch; }
+code { font-family: var(--font-mono); font-size: 0.86em; }
+.lead { color: var(--muted); font-size: 16.5px; }
+.muted { color: var(--muted); }
+header { display: grid; gap: 12px; }
+
+button { font: 500 14px/1 var(--font-body); border-radius: 8px; padding: 10px 14px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+button:hover { border-color: var(--ours); }
+button.primary { background: var(--ours); border-color: var(--ours); color: var(--surface); }
+button.ghost { border-color: transparent; background: none; color: var(--ours); padding-inline: 4px; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--ours); outline-offset: 2px; }
+input, select, textarea { font: 14px/1.4 var(--font-body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 100%; box-sizing: border-box; min-width: 0; }
+textarea { font-family: var(--font-mono); font-size: 12.5px; resize: vertical; min-height: 68px; }
+label.f { display: grid; gap: 5px; min-width: 0; }
+label.f > span { font-weight: 500; font-size: 13.5px; }
+label.f small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; }
+.chk { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.chk input { width: auto; }
+
+/* Переключатель вариантов */
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs button { display: grid; gap: 4px; text-align: left; padding: 12px 14px; flex: 1 1 220px; line-height: 1.3; }
+.tabs button b { font-size: 15px; }
+.tabs button span { color: var(--muted); font-size: 13px; }
+.tabs button[aria-selected="true"] { border-color: var(--ours); background: var(--ours-soft); box-shadow: inset 0 0 0 1px var(--ours); }
+
+.variant { display: grid; gap: 16px; min-width: 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; }
+.facts div { display: grid; gap: 2px; font-size: 14px; }
+.facts b { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+/* «Окно» макета */
+.frame { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; min-width: 0; }
+.frame-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--sunken); font-size: 12.5px; color: var(--muted); }
+.frame-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); display: inline-block; }
+.frame-body { padding: 18px; display: grid; gap: 16px; min-width: 0; }
+
+.pill { display: inline-block; white-space: nowrap; font: 600 12px/1 var(--font-body); padding: 5px 9px; border-radius: 999px; }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, var(--surface)); }
+.pill.bad { color: var(--check); background: color-mix(in srgb, var(--check) 14%, var(--surface)); }
+.pill.now { color: var(--ours); background: var(--ours-soft); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+
+/* Замечания по шагам — как в исправленном блоке «Проверка» */
+.pgroup { display: grid; gap: 3px; }
+.pgroup b { color: var(--check); font-size: 13.5px; }
+.pgroup ul { margin: 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 3px; }
+.allgood { color: var(--ok); font-weight: 500; font-size: 14px; }
+
+/* ---------------- Вариант А: мастер по шагам */
+.wiz { display: grid; grid-template-columns: 230px minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
+.rail { display: grid; gap: 4px; }
+.rail button { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: center; text-align: left; border-color: transparent; background: none; padding: 9px 10px; line-height: 1.3; }
+.rail button .n { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font: 600 13px/1 var(--font-body); border: 1.5px solid var(--line); color: var(--muted); background: var(--surface); }
+.rail button .t { display: grid; gap: 1px; }
+.rail button .t small { color: var(--muted); font-size: 12px; }
+.rail button.done .n { background: var(--ok); border-color: var(--ok); color: var(--surface); }
+.rail button.warn .n { border-color: var(--check); color: var(--check); }
+.rail button.warn .t small { color: var(--check); }
+.rail button[aria-selected="true"] { background: var(--surface); border-color: var(--line); }
+.rail button[aria-selected="true"] .n { border-color: var(--ours); color: var(--ours); }
+.wiz-step { min-height: 300px; }
+.wiz-step h2 { font: 600 22px/1.25 var(--font-body); }
+.wiz-nav { display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
+.says { display: grid; gap: 8px; font-size: 14px; }
+.says p { padding-left: 12px; border-left: 3px solid var(--line); }
+.says p.s-wait { border-color: var(--wait); } .says p.s-check { border-color: var(--check); } .says p.s-plat { border-color: var(--platform); }
+.says p.s-ours { border-color: var(--ours); } .says p.s-data { border-color: var(--data); }
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.choices button { display: grid; gap: 5px; text-align: left; padding: 14px; line-height: 1.35; }
+.choices button span { color: var(--muted); font-size: 13px; }
+.choices button.on { border-color: var(--ours); background: var(--ours-soft); box-shadow: inset 0 0 0 1px var(--ours); }
+
+/* ---------------- Вариант Б: схема как навигация */
+.flowbar { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+.flowbar .arrow { align-self: center; color: var(--muted); }
+.block { flex: 1 1 150px; display: grid; gap: 6px; text-align: left; padding: 0; overflow: hidden; line-height: 1.3; }
+.block .stripe { height: 5px; }
+.block .in { display: grid; gap: 4px; padding: 8px 12px 12px; }
+.block .name { font: 500 12.5px/1.3 var(--font-mono); }
+.block .what { color: var(--muted); font-size: 12.5px; }
+.block .pill { justify-self: start; }
+.block[aria-selected="true"] { border-color: var(--ours); box-shadow: 0 0 0 2px var(--ours-soft); }
+.b-wait .stripe { background: var(--wait); } .b-check .stripe { background: var(--check); } .b-plat .stripe { background: var(--platform); }
+.b-ours .stripe { background: var(--ours); } .b-data .stripe { background: var(--data); }
+.board { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+
+/* ---------------- Вариант В: паспорт процесса */
+.topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+.topbar .title { font: 500 15px/1.2 var(--font-mono); }
+.topbar .sp { flex: 1 1 auto; }
+.pass { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+.rows { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.rows details { border-top: 1px solid var(--line); }
+.rows details:first-child { border-top: none; }
+.rows summary { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 16px; cursor: pointer; list-style: none; }
+.rows summary::-webkit-details-marker { display: none; }
+.rows summary b { font-weight: 600; font-size: 14px; }
+.rows summary span.v { color: var(--muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rows details[open] summary { background: var(--sunken); }
+.rows .inner { padding: 14px 16px 16px; display: grid; gap: 12px; }
+.kv { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 8px 12px; align-items: center; font-size: 14px; }
+.kv > span { color: var(--muted); }
+pre.yaml { margin: 0; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; font: 12px/1.55 var(--font-mono); max-height: 430px; }
+
+/* Сравнение */
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th { font-weight: 600; color: var(--muted); font-size: 12.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+.rec { border-left: 4px solid var(--ours); padding: 4px 0 4px 14px; display: grid; gap: 6px; }
+
+@media (max-width: 980px) {
+  .wiz { grid-template-columns: 1fr; }
+  .rail { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .board, .pass { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .rows summary { grid-template-columns: 1fr auto; }
+  .rows summary span.v { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
+  .kv { grid-template-columns: 1fr; }
+  .frame-body { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+</style>
+
+<div class="page">
+  <header>
+    <h1>Варианты конструктора</h1>
+    <p class="lead">Три раскладки одного и того же экрана на одном примере процесса. Макеты рабочие: шаги и блоки переключаются. Цвета и шрифты одинаковые, чтобы сравнивать устройство страницы, а не оформление.</p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Вариант">
+    <button type="button" role="tab" id="tab-a" data-variant="a" aria-selected="true"><b>А. Мастер по шагам</b><span>Один шаг на экране, слева путь</span></button>
+    <button type="button" role="tab" id="tab-b" data-variant="b" aria-selected="false"><b>Б. Схема как навигация</b><span>Сверху процесс, ниже поля выбранного блока</span></button>
+    <button type="button" role="tab" id="tab-c" data-variant="c" aria-selected="false"><b>В. Паспорт процесса</b><span>Всё на одном листе, строки раскрываются</span></button>
+  </div>
+
+  <!-- ============================== А ============================== -->
+  <section class="variant" id="variant-a" data-variant-panel="a">
+    <div class="facts">
+      <div><b>Идея</b>Человека ведут за руку: на экране только текущий шаг, остальное не отвлекает.</div>
+      <div><b>Кому подходит</b>Коллеге, который открывает конструктор раз в месяц и не помнит, что где.</div>
+      <div><b>Чем платим</b>Опытному дольше: нельзя окинуть весь процесс взглядом, правка одного поля требует перейти к шагу.</div>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><i></i><i></i><i></i><span>Конструктор скоринга · cure_30</span></div>
+      <div class="frame-body">
+        <div class="wiz">
+          <nav class="rail" aria-label="Шаги" data-group="wiz">
+            <button type="button" class="done" data-show="1" aria-selected="false"><span class="n">✓</span><span class="t"><b>Что делаем</b><small>Одна модель</small></span></button>
+            <button type="button" class="done" data-show="2" aria-selected="false"><span class="n">✓</span><span class="t"><b>Когда запускать</b><small>Каждый день, 07:30</small></span></button>
+            <button type="button" class="warn" data-show="3" aria-selected="false"><span class="n">3</span><span class="t"><b>Данные</b><small>1 замечание</small></span></button>
+            <button type="button" data-show="4" aria-selected="true"><span class="n">4</span><span class="t"><b>Модель</b><small>сейчас здесь</small></span></button>
+            <button type="button" data-show="5" aria-selected="false"><span class="n">5</span><span class="t"><b>Куда писать</b><small>не заполнено</small></span></button>
+            <button type="button" data-show="6" aria-selected="false"><span class="n">6</span><span class="t"><b>Отправить</b><small>после проверки</small></span></button>
+          </nav>
+
+          <div class="card wiz-step">
+            <div data-panel="wiz" data-id="1" hidden>
+              <h2>Что делаем</h2>
+              <div class="choices" style="margin-top:12px">
+                <button type="button" class="on"><b>Одна модель</b><span>Модель из реестра считает скор и пишет в витрину</span></button>
+                <button type="button"><b>Несколько моделей</b><span>Несколько скоров в одну витрину</span></button>
+                <button type="button"><b>Калибровка</b><span>Учимся на свежем окне, применяем к новым данным</span></button>
+                <button type="button"><b>Одна модель на DLH</b><span>Данные в DLH, расчёт в Spark</span></button>
+              </div>
+            </div>
+            <div data-panel="wiz" data-id="2" hidden>
+              <h2>Когда запускать</h2>
+              <div class="two" style="margin-top:12px">
+                <label class="f"><span>Имя процесса</span><input id="a-name" value="cure_30"></label>
+                <label class="f"><span>Владелец</span><input id="a-owner" value="i.ivanov"></label>
+                <label class="f"><span>Как часто</span><select id="a-freq"><option>Каждый день</option><option>По будням</option><option>Раз в неделю</option></select></label>
+                <label class="f"><span>Время по Москве</span><input id="a-time" type="time" value="07:30"></label>
+              </div>
+              <label class="f" style="margin-top:12px"><span>Ждать обновления таблиц</span><input id="a-wait" value="usr_demo.cure_features"><small>Несколько таблиц через запятую.</small></label>
+            </div>
+            <div data-panel="wiz" data-id="3" hidden>
+              <h2>Данные</h2>
+              <label class="f" style="margin-top:12px"><span>SQL-запрос выборки</span><textarea id="a-sql">select client_id, report_dt, dpd_days, debt_amt, product_cd
+from usr_demo.cure_features</textarea></label>
+              <label class="f" style="margin-top:12px"><span>Ключ выборки</span><input id="a-key" placeholder="client_id, report_dt"><small style="color:var(--check)">Укажите ключ: одна или несколько колонок через запятую.</small></label>
+            </div>
+            <div data-panel="wiz" data-id="4">
+              <h2>Модель</h2>
+              <p class="muted">Откуда взять модель и что она выдаёт.</p>
+              <label class="f" style="margin-top:12px"><span>Ссылка на модель в Model Registry</span><input id="a-mrid" value="team/cure_30/1.0.0"><small>Версию указывайте явно.</small></label>
+              <label class="f" style="margin-top:12px"><span>Окружение модели</span><select id="a-image"><option>LightGBM 3.3.5 (как в pd_model)</option></select></label>
+              <label class="chk" style="margin-top:12px"><input type="checkbox" id="a-packed" checked> <span>Модель упакована вместе с обработкой</span></label>
+              <div class="wiz-nav" style="margin-top:16px"><button type="button" data-go="wiz:3">Назад</button><button type="button" class="primary" data-go="wiz:5">Далее: куда писать</button></div>
+            </div>
+            <div data-panel="wiz" data-id="5" hidden>
+              <h2>Куда писать</h2>
+              <div class="two" style="margin-top:12px">
+                <label class="f"><span>Таблица результата</span><input id="a-table" placeholder="usr_demo.cure_30_scores"></label>
+                <label class="f"><span>Режим</span><select id="a-mode"><option>Заменять содержимое</option><option>Дописывать</option></select></label>
+              </div>
+              <p class="muted" style="margin-top:12px">Колонки ключа и скора добавятся сами. Остальные можно вставить списком из SQL.</p>
+            </div>
+            <div data-panel="wiz" data-id="6" hidden>
+              <h2>Отправить</h2>
+              <p class="muted">Проверьте итог справа. Осталось 2 замечания: шаги 3 и 5.</p>
+              <div class="two" style="margin-top:12px">
+                <label class="f"><span>Куда</span><select id="a-stage"><option>Сначала на тест (в тени)</option><option>Сразу на боевой инстанс</option></select></label>
+              </div>
+              <div style="margin-top:14px"><button type="button" class="primary" disabled>Отправить на тест</button></div>
+            </div>
+          </div>
+
+          <aside class="card">
+            <h3>Что получится</h3>
+            <div class="says">
+              <p class="s-wait">Каждый день в 07:30 ждём обновления <code>usr_demo.cure_features</code>.</p>
+              <p class="s-check">Берём выборку и проверяем: не пусто, ключ уникален.</p>
+              <p class="s-plat">Считаем скор моделью <code>team/cure_30/1.0.0</code>.</p>
+              <p class="s-ours">Пишем результат. Таблица ещё не указана.</p>
+            </div>
+            <h3>Проверка</h3>
+            <div class="pgroup"><b>Шаг 3. Данные</b><ul><li>Укажите ключ выборки.</li></ul></div>
+            <div class="pgroup"><b>Шаг 5. Куда писать</b><ul><li>Укажите таблицу результата.</li></ul></div>
+            <button type="button" class="ghost" style="justify-self:start">Показать конфиг</button>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== Б ============================== -->
+  <section class="variant" id="variant-b" data-variant-panel="b" hidden>
+    <div class="facts">
+      <div><b>Идея</b>Процесс нарисован сверху так же, как в Airflow. Блок схемы и есть вкладка с его настройками.</div>
+      <div><b>Кому подходит</b>Тем, кто думает процессом: видно, из чего он состоит и какой блок не дозаполнен.</div>
+      <div><b>Чем платим</b>Общие поля вроде имени и расписания не принадлежат ни одному блоку: им нужен отдельный, шестой.</div>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><i></i><i></i><i></i><span>Конструктор скоринга · cure_30</span></div>
+      <div class="frame-body">
+        <div class="flowbar" data-group="flow" role="tablist" aria-label="Блоки процесса">
+          <button type="button" class="block b-ours" data-show="0" aria-selected="false"><span class="stripe"></span><span class="in"><span class="name">процесс</span><span class="what">cure_30 · каждый день 07:30</span><span class="pill ok">готово</span></span></button>
+          <span class="arrow">→</span>
+          <button type="button" class="block b-wait" data-show="1" aria-selected="false"><span class="stripe"></span><span class="in"><span class="name">wait_source</span><span class="what">ждём 1 таблицу</span><span class="pill ok">готово</span></span></button>
+          <span class="arrow">→</span>
+          <button type="button" class="block b-check" data-show="2" aria-selected="false"><span class="stripe"></span><span class="in"><span class="name">read_source</span><span class="what">выборка и проверки</span><span class="pill bad">1 замечание</span></span></button>
+          <span class="arrow">→</span>
+          <button type="button" class="block b-plat" data-show="3" aria-selected="true"><span class="stripe"></span><span class="in"><span class="name">inference</span><span class="what">team/cure_30/1.0.0</span><span class="pill ok">готово</span></span></button>
+          <span class="arrow">→</span>
+          <button type="button" class="block b-data" data-show="4" aria-selected="false"><span class="stripe"></span><span class="in"><span class="name">write</span><span class="what">таблица не указана</span><span class="pill bad">1 замечание</span></span></button>
+        </div>
+        <div class="board">
+          <div class="card">
+            <div data-panel="flow" data-id="0" hidden>
+              <h2>Процесс</h2>
+              <div class="two"><label class="f"><span>Имя процесса</span><input id="b-name" value="cure_30"></label><label class="f"><span>Владелец</span><input id="b-owner" value="i.ivanov"></label>
+              <label class="f"><span>Как часто</span><select id="b-freq"><option>Каждый день</option></select></label><label class="f"><span>Время по Москве</span><input id="b-time" type="time" value="07:30"></label></div>
+            </div>
+            <div data-panel="flow" data-id="1" hidden>
+              <h2>Ожидание источника</h2>
+              <label class="f"><span>Ждать обновления таблиц</span><input id="b-wait" value="usr_demo.cure_features"><small>Процесс стартует, когда обновились все.</small></label>
+            </div>
+            <div data-panel="flow" data-id="2" hidden>
+              <h2>Чтение и проверки</h2>
+              <label class="f"><span>SQL-запрос выборки</span><textarea id="b-sql">select client_id, report_dt, dpd_days, debt_amt, product_cd
+from usr_demo.cure_features</textarea></label>
+              <div class="two"><label class="f"><span>Ключ выборки</span><input id="b-key" placeholder="client_id, report_dt"><small style="color:var(--check)">Укажите ключ.</small></label><label class="f"><span>Минимум строк</span><input id="b-min" value="1"></label></div>
+            </div>
+            <div data-panel="flow" data-id="3">
+              <h2>Расчёт скора</h2>
+              <label class="f"><span>Ссылка на модель в Model Registry</span><input id="b-mrid" value="team/cure_30/1.0.0"></label>
+              <div class="two"><label class="f"><span>Окружение модели</span><select id="b-image"><option>LightGBM 3.3.5 (как в pd_model)</option></select></label><label class="f"><span>Колонка скора</span><input id="b-score" value="score"></label></div>
+              <label class="chk"><input type="checkbox" id="b-packed" checked> <span>Модель упакована вместе с обработкой</span></label>
+            </div>
+            <div data-panel="flow" data-id="4" hidden>
+              <h2>Запись результата</h2>
+              <div class="two"><label class="f"><span>Таблица результата</span><input id="b-table" placeholder="usr_demo.cure_30_scores"><small style="color:var(--check)">Укажите таблицу.</small></label><label class="f"><span>Режим</span><select id="b-mode"><option>Заменять содержимое</option></select></label></div>
+            </div>
+          </div>
+          <aside class="card">
+            <h3>Проверка</h3>
+            <div class="pgroup"><b>read_source</b><ul><li>Укажите ключ выборки.</li></ul></div>
+            <div class="pgroup"><b>write</b><ul><li>Укажите таблицу результата.</li></ul></div>
+            <h3>Отправить на инстанс</h3>
+            <label class="f"><span>Куда</span><select id="b-stage"><option>Сначала на тест (в тени)</option><option>Сразу на боевой инстанс</option></select></label>
+            <button type="button" class="primary" disabled>Отправить на тест</button>
+            <small class="muted">Сначала исправьте 2 замечания.</small>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== В ============================== -->
+  <section class="variant" id="variant-c" data-variant-panel="c" hidden>
+    <div class="facts">
+      <div><b>Идея</b>Весь процесс на одном листе. Строка показывает уже введённое значение и раскрывается для правки.</div>
+      <div><b>Кому подходит</b>Вам и тем, кто правит существующие процессы: открыл, увидел всё, поменял одно поле, отправил.</div>
+      <div><b>Чем платим</b>Новичку не подсказан порядок. Длинные разделы вроде калибровки с наборами сегментов делают лист тяжёлым.</div>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><i></i><i></i><i></i><span>Конструктор скоринга · cure_30</span></div>
+      <div class="frame-body">
+        <div class="topbar">
+          <span class="title">cure_30</span><span class="pill now">одна модель</span><span class="pill bad">2 замечания</span>
+          <span class="sp"></span>
+          <select id="c-stage" style="width:auto"><option>на тест (в тени)</option><option>на боевой инстанс</option></select>
+          <button type="button" class="primary" disabled>Отправить</button>
+        </div>
+        <div class="pass">
+          <div class="rows">
+            <details><summary><b>Расписание</b><span class="v">каждый день в 07:30 МСК · ждём usr_demo.cure_features</span><span class="pill ok">готово</span></summary>
+              <div class="inner"><div class="kv"><span>Как часто</span><select id="c-freq"><option>Каждый день</option></select><span>Время по Москве</span><input id="c-time" type="time" value="07:30"><span>Ждать таблицы</span><input id="c-wait" value="usr_demo.cure_features"><span>Владелец</span><input id="c-owner" value="i.ivanov"></div></div></details>
+            <details><summary><b>Данные</b><span class="v">запрос к usr_demo.cure_features · ключ не указан</span><span class="pill bad">1</span></summary>
+              <div class="inner"><label class="f"><span>SQL-запрос выборки</span><textarea id="c-sql">select client_id, report_dt, dpd_days, debt_amt, product_cd
+from usr_demo.cure_features</textarea></label><div class="kv"><span>Ключ выборки</span><input id="c-key" placeholder="client_id, report_dt"><span>Минимум строк</span><input id="c-min" value="1"></div></div></details>
+            <details open><summary><b>Модель</b><span class="v">team/cure_30/1.0.0 · упакована · LightGBM 3.3.5</span><span class="pill ok">готово</span></summary>
+              <div class="inner"><div class="kv"><span>Ссылка в Model Registry</span><input id="c-mrid" value="team/cure_30/1.0.0"><span>Окружение</span><select id="c-image"><option>LightGBM 3.3.5 (как в pd_model)</option></select><span>Колонка скора</span><input id="c-score" value="score"><span>Упаковка</span><label class="chk"><input type="checkbox" id="c-packed" checked> <span>упакована вместе с обработкой</span></label></div></div></details>
+            <details><summary><b>Результат</b><span class="v">таблица не указана · заменять содержимое</span><span class="pill bad">1</span></summary>
+              <div class="inner"><div class="kv"><span>Таблица</span><input id="c-table" placeholder="usr_demo.cure_30_scores"><span>Режим</span><select id="c-mode"><option>Заменять содержимое</option></select></div></div></details>
+            <details><summary><b>Алерты</b><span class="v">#scoring-alerts</span><span class="pill ok">готово</span></summary>
+              <div class="inner"><div class="kv"><span>Куда писать при падении</span><input id="c-alerts" value="#scoring-alerts"></div></div></details>
+          </div>
+          <aside class="card">
+            <h3>Готовый конфиг</h3>
+<pre class="yaml">recipe: single_model
+dag_id: cure_30
+owner: i.ivanov
+schedule: "30 4 * * *"    # 07:30 МСК
+shadow: true
+wait_for:
+  tables: [usr_demo.cure_features]
+source:
+  query: |
+    select client_id, report_dt, ...
+    from usr_demo.cure_features
+model:
+  mrid: [team/cure_30/1.0.0]
+  packed: true
+sinks:
+  - table: ""
+    mode: replace</pre>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <h2>Сравнение</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>А. Мастер</th><th>Б. Схема</th><th>В. Паспорт</th><th>Сейчас</th></tr></thead>
+      <tbody>
+        <tr><td><b>Новичок без подсказок</b></td><td>справится</td><td>справится, если знаком с Airflow</td><td>может растеряться</td><td>справится, но длинная прокрутка</td></tr>
+        <tr><td><b>Правка одного поля</b></td><td>3 клика</td><td>2 клика</td><td>1 клик</td><td>прокрутка до поля</td></tr>
+        <tr><td><b>Калибровка с наборами сегментов</b></td><td>помещается: шаг на весь экран</td><td>помещается</td><td>тяжело: лист раздувается</td><td>длинная, но работает</td></tr>
+        <tr><td><b>Весь процесс одним взглядом</b></td><td>только в итоге справа</td><td>да, в схеме</td><td>да, в строках</td><td>схема справа</td></tr>
+        <tr><td><b>Телефон</b></td><td>хорошо</td><td>схема переносится в столбик</td><td>хорошо</td><td>хорошо</td></tr>
+        <tr><td><b>Объём переделки</b></td><td>средний: меняется каркас, поля те же</td><td>большой: поля надо разложить по блокам</td><td>средний</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+    <div class="rec">
+      <h3>Что я бы выбрал</h3>
+      <p>Вариант А как основной вид. Он лучше всего отвечает исходной задаче: человек, который не знает Airflow, проходит путь от начала до кнопки «Отправить» и не теряется.</p>
+      <p>Из варианта В стоит взять одну вещь: когда процесс открыт из GitLab для правки, показывать его паспортом. Тогда новичок идёт по шагам, а опытный правит одно поле в один клик.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+// Переключение вариантов и внутренних панелей макетов. Только показ: данные никуда не уходят.
+function select(group, id) {
+  document.querySelectorAll('[data-group="' + group + '"] [data-show]').forEach(function (b) {
+    b.setAttribute("aria-selected", String(b.getAttribute("data-show") === id));
+  });
+  document.querySelectorAll('[data-panel="' + group + '"]').forEach(function (p) { p.hidden = p.getAttribute("data-id") !== id; });
+}
+function showVariant(v) {
+  document.querySelectorAll("[data-variant]").forEach(function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-variant") === v)); });
+  document.querySelectorAll("[data-variant-panel]").forEach(function (p) { p.hidden = p.getAttribute("data-variant-panel") !== v; });
+}
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("button");
+  if (!b) return;
+  if (b.hasAttribute("data-variant")) { showVariant(b.getAttribute("data-variant")); try { history.replaceState(null, "", "#" + b.getAttribute("data-variant")); } catch (err) {} return; }
+  if (b.hasAttribute("data-show")) { select(b.closest("[data-group]").getAttribute("data-group"), b.getAttribute("data-show")); return; }
+  if (b.hasAttribute("data-go")) { var parts = b.getAttribute("data-go").split(":"); select(parts[0], parts[1]); return; }
+  var choices = b.closest(".choices");
+  if (choices) choices.querySelectorAll("button").forEach(function (x) { x.classList.toggle("on", x === b); });
+});
+var start = (location.hash || "").replace("#", "");
+if (["a", "b", "c"].indexOf(start) >= 0) showVariant(start);
+</script>
