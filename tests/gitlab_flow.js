@@ -174,6 +174,10 @@ async function submit(server, name, target, token, folder) {
     // процесс открыт из папки old_one, а DAG в форме назван иначе: правка идёт в ту же папку
     const {mr} = await submit(g, "old_one_v2", "test", "good", "old_one");
     out.update_existing = {existed: mr.existed, file: mr.file, folders: [...new Set(Object.keys(g.state.branches).map(b => g.state.branches[b].file))]};
+    // имя DAG'а занято процессом из папки с другим названием (как pd_model / pd_model_v2): отказ с подсказкой
+    const legacy = fakeGitlab({files: {"pipelines/legacy/pipeline.yaml": "recipe: multi_model\ndag_id: legacy_v2\n"}});
+    out.dag_taken = await submit(legacy, "legacy_v2", "test").then(() => "sent", e => e.message);
+    out.dag_taken_commits = legacy.state.calls.filter(c => c.startsWith("POST")).length;
     // новый процесс с именем, которое уже занято: отказ, чужой процесс не затирается
     out.name_taken = await submit(fakeGitlab(), "old_one", "test").then(() => "sent", e => e.message);
     const same = fakeGitlab();

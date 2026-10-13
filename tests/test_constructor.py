@@ -264,6 +264,7 @@ def test_gitlab_flow_on_fake_server(tmp_path):
     assert out["update_existing"] == {"existed": True, "file": "pipelines/old_one/pipeline.yaml",
                                       "folders": ["pipelines/old_one/pipeline.yaml"]}
     assert "уже есть в GitLab" in out["name_taken"]
+    assert "pipelines/legacy" in out["dag_taken"] and out["dag_taken_commits"] == 0
     assert "такой же конфиг" in out["same_config"]
     assert "токен" in out["bad_token"] and "Нет связи" in out["offline"]
     assert out["list"] == ["a", "b", "old_one"]
