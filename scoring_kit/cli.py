@@ -94,7 +94,7 @@ def _cmd_check_approver(args) -> int:
 def _cmd_publish(args) -> int:
     from scoring_kit.publish import publish
 
-    publish(Path(args.root), args.env, yes=args.yes, dry_run=args.dry_run)
+    publish(Path(args.root), args.env, yes=args.yes, dry_run=args.dry_run, force_local=args.force_local)
     return 0
 
 
@@ -260,6 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--root", default=".", help="корень репозитория процессов (по умолчанию текущая папка)")
     p.add_argument("--dry-run", action="store_true", help="только собрать папку publish и показать список")
     p.add_argument("--yes", action="store_true", help="без вопроса о подтверждении (для CI)")
+    p.add_argument("--force-local", action="store_true",
+                   help="публиковать с компьютера без сверки с GitLab (аварийный случай, например CI не работает)")
     p.set_defaults(func=_cmd_publish)
 
     p = sub.add_parser("constructor", help="собрать страницу-конструктор pipeline.yaml для команды")

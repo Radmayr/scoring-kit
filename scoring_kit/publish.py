@@ -19,6 +19,7 @@ mlc публикует папку целиком и удаляет с инста
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -174,15 +175,77 @@ def _run(args: list[str]) -> int:
         raise PipelineError("Не найдена команда mlc. Установите ML Core CLI или запускайте из CI.") from None
 
 
+def _git(root: Path, *args: str) -> tuple[int, str]:
+    try:
+        res = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8")
+    except OSError as e:
+        return 1, str(e)
+    return res.returncode, (res.stdout or "") + (res.stderr or "")
+
+
+def in_ci() -> bool:
+    return bool(os.environ.get("GITLAB_CI") or os.environ.get("CI"))
+
+
+def check_local_copy(root: Path, git: Callable[..., tuple[int, str]] = _git) -> None:
+    """Публикация с компьютера разрешена, только если копия совпадает с основной веткой в GitLab.
+
+    mlc заменяет на инстансе весь набор DAG'ов: публикация из устаревшей или изменённой копии удалит
+    процессы коллег или выложит то, чего нет в репозитории (и что пропадёт при следующей выкладке из CI).
+    """
+    code, out = git(root, "rev-parse", "--is-inside-work-tree")
+    if code != 0 or out.strip() != "true":
+        raise PipelineError(f"{root}: это не копия git-репозитория — непонятно, совпадает ли набор с GitLab")
+    code, out = git(root, "status", "--porcelain", "--untracked-files=all")
+    changed = [line[3:] for line in out.splitlines() if line.strip()]
+    if code != 0 or changed:
+        shown = ", ".join(changed[:5]) + (f" и ещё {len(changed) - 5}" if len(changed) > 5 else "")
+        raise PipelineError(
+            f"в копии есть изменения, которых нет в GitLab: {shown}. Отправьте их через merge request "
+            "(или уберите) — иначе на инстанс уйдёт то, чего нет в репозитории"
+        )
+    code, out = git(root, "fetch", "--quiet", "origin")
+    if code != 0:
+        raise PipelineError(f"не удалось получить состояние GitLab (git fetch): {out.strip()[:200]}")
+    code, head = git(root, "rev-parse", "HEAD")
+    code2, ref = git(root, "rev-parse", "--abbrev-ref", "origin/HEAD")
+    branch = ref.strip() if code2 == 0 and ref.strip() and "origin/" in ref else "origin/main"
+    code3, remote = git(root, "rev-parse", branch)
+    if code != 0 or code3 != 0:
+        raise PipelineError(f"не удалось сравнить копию с {branch}")
+    if head.strip() != remote.strip():
+        code, behind = git(root, "rev-list", "--count", f"HEAD..{branch}")
+        code, ahead = git(root, "rev-list", "--count", f"{branch}..HEAD")
+        raise PipelineError(
+            f"копия не совпадает с {branch} в GitLab (отстаёт на {behind.strip()} коммитов, "
+            f"неотправленных коммитов: {ahead.strip()}). Сделайте git checkout main и git pull; "
+            "свои изменения отправьте через merge request"
+        )
+
+
 def publish(
     root: Path,
     env: str,
     *,
     yes: bool = False,
     dry_run: bool = False,
+    force_local: bool = False,
     run: Callable[[list[str]], int] = _run,
     ask: Callable[[str], str] = input,
+    git: Callable[..., tuple[int, str]] = _git,
 ) -> Plan:
+    # Публикация из CI собирает набор из основной ветки; с компьютера — только из копии, совпадающей с ней.
+    if not dry_run and not in_ci():
+        if force_local:
+            print("ВНИМАНИЕ: --force-local — публикация без сверки с GitLab. Набор с этого компьютера заменит всё на инстансе.")
+        else:
+            try:
+                check_local_copy(root, git)
+            except PipelineError as e:
+                raise PipelineError(
+                    f"Публикация с компьютера отменена: {e}.\n"
+                    "Обычный путь — выкладка из CI (merge request → слияние → deploy-test / deploy-prod)."
+                ) from None
     plan = assemble(root, env)
     print(f"\nОкружение {env}: инстанс {plan.instance}, проект {plan.project}")
     print(f"Будет опубликовано {len(plan.files)} DAG'ов (папка {plan.out}):")

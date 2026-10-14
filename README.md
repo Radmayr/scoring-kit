@@ -44,10 +44,10 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.8.0"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.8.1"
 ```
 
-Всегда закрепляйте версию (тег `@v0.8.0`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.8.1`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Конструктор: процесс без программирования
@@ -331,6 +331,13 @@ scoring publish --env test --dry-run  # только собрать папку p
 Инстансы и проект — в `environments.yaml` в корне репозитория процессов. Пустой набор не
 публикуется никогда.
 
+**Публикация с компьютера сверяется с GitLab.** Вне CI `scoring publish` откажется публиковать, если
+в копии есть изменения, которых нет в GitLab, или копия не совпадает с основной веткой (отстаёт или
+содержит неотправленные коммиты). Иначе набор с одного компьютера удалил бы с инстанса процессы
+коллег или выложил бы то, что пропадёт при следующей выкладке из CI. Обычный путь — выкладка из CI;
+для аварийного случая (CI не работает) есть `--force-local`. Ручной `mlc airflow publish` эта защита
+не закрывает: его можно ограничить только правами на инстанс.
+
 Целевые таблицы (в том числе теневые) создаются DAG'ом при первом запуске
 (`create table if not exists` по `sinks[].columns`). После прогонов старого и теневого DAG'а:
 
@@ -384,7 +391,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 | `scoring constructor [--presets F] [--pipelines DIR...] [-o F]` | страница-конструктор pipeline.yaml для команды |
 | `scoring new DIR [--recipe R] [--custom-predictor]` | заготовка процесса: single_model, multi_model, fit_apply, dlh |
 | `scoring validate DIR...` | проверка конфига и predictor.py (для CI) |
-| `scoring publish --env test\|prod [--dry-run] [--yes]` | собрать полный набор для инстанса и опубликовать |
+| `scoring publish --env test\|prod [--dry-run] [--yes] [--force-local]` | собрать полный набор для инстанса и опубликовать; с компьютера — только из копии, совпадающей с GitLab |
 | `scoring check-approver --user LOGIN` | право публиковать на боевой инстанс (`approvers.txt`); вызывается в CI перед выкладкой на прод |
 | `scoring schema [-o pipeline.schema.json]` | схема для подсказок в редакторе |
 | `scoring render DIR... [-o build/dags] [--shadow]` | генерация DAG-файлов |
@@ -430,7 +437,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.8.0`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.8.1`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
 (`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 

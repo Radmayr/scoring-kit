@@ -67,6 +67,12 @@ def test_model_defaults_field_does_not_leak(tmp_path):
 # ---------------------------------------------------------------- publish
 
 
+@pytest.fixture(autouse=True)
+def as_in_ci(monkeypatch):
+    """По умолчанию тесты публикации идут «как в CI»: сверку копии с GitLab проверяют отдельные тесты ниже."""
+    monkeypatch.setenv("GITLAB_CI", "true")
+
+
 @pytest.fixture()
 def repo(tmp_path):
     root = tmp_path / "repo"
@@ -217,3 +223,84 @@ def test_check_approver(repo, capsys):
     assert main(["check-approver", "--user", "p.petrov", "--root", str(repo)]) == 0
     assert main(["check-approver", "--user", "x.other", "--root", str(repo)]) == 1
     assert "i.ivanov, p.petrov" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- защита публикации с компьютера
+
+def _sh(cwd, *args):
+    import subprocess as sp
+    res = sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
+@pytest.fixture()
+def synced(repo, tmp_path, monkeypatch):
+    """Копия процессов, совпадающая с «GitLab» (локальный bare-репозиторий как origin)."""
+    monkeypatch.delenv("GITLAB_CI", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    origin = tmp_path / "origin.git"
+    _sh(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    _sh(repo, "init", "-b", "main")
+    _sh(repo, "add", "-A")
+    _sh(repo, "commit", "-m", "init")
+    _sh(repo, "remote", "add", "origin", str(origin))
+    _sh(repo, "push", "-u", "origin", "main")
+    _sh(repo, "remote", "set-head", "origin", "main")
+    return repo, origin
+
+
+def _publish_calls(repo, **kw):
+    calls = []
+    publish(repo, "test", yes=True, run=lambda a: calls.append(a) or 0, ask=lambda _: "да", **kw)
+    return calls
+
+
+def test_local_publish_allowed_when_copy_matches_gitlab(synced):
+    repo, _ = synced
+    assert len(_publish_calls(repo)) == 2          # --check и публикация
+
+
+def test_local_publish_refused_with_uncommitted_changes(synced):
+    repo, _ = synced
+    target = repo / "pipelines" / "demo_multi" / "pipeline.yaml"
+    target.write_text(target.read_text(encoding="utf-8") + "# правка\n", encoding="utf-8")
+    with pytest.raises(PipelineError, match="изменения, которых нет в GitLab"):
+        _publish_calls(repo)
+
+
+def test_local_publish_refused_when_behind_or_ahead(synced, tmp_path):
+    repo, origin = synced
+    other = tmp_path / "colleague"
+    _sh(tmp_path, "clone", str(origin), str(other))
+    (other / "pipelines" / "demo_multi" / "note.txt").write_text("x", encoding="utf-8")
+    _sh(other, "add", "-A")
+    _sh(other, "commit", "-m", "коллега")
+    _sh(other, "push", "origin", "main")
+    with pytest.raises(PipelineError, match="отстаёт на 1"):
+        _publish_calls(repo)
+    _sh(repo, "pull", "origin", "main")
+    (repo / "local.txt").write_text("x", encoding="utf-8")
+    _sh(repo, "add", "-A")
+    _sh(repo, "commit", "-m", "моё, не отправлено")
+    with pytest.raises(PipelineError, match="неотправленных коммитов: 1"):
+        _publish_calls(repo)
+
+
+def test_local_publish_force_and_ci_and_dry_run(synced, monkeypatch):
+    repo, _ = synced
+    target = repo / "pipelines" / "demo_multi" / "pipeline.yaml"
+    target.write_text(target.read_text(encoding="utf-8") + "# правка\n", encoding="utf-8")
+    publish(repo, "test", dry_run=True)                       # сухой прогон не проверяет копию
+    _sh(repo, "checkout", "--", ".")
+    (repo / "scratch.txt").write_text("x", encoding="utf-8")
+    assert len(_publish_calls(repo, force_local=True)) == 2
+    monkeypatch.setenv("GITLAB_CI", "true")
+    assert len(_publish_calls(repo)) == 2                     # в CI копия всегда из основной ветки
+
+
+def test_local_publish_refused_outside_git(repo, monkeypatch):
+    monkeypatch.delenv("GITLAB_CI", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    with pytest.raises(PipelineError, match="не копия git"):
+        _publish_calls(repo, git=lambda root, *a: (128, "fatal: not a git repository"))
