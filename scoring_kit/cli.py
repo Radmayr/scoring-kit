@@ -83,11 +83,28 @@ def _cmd_check_approver(args) -> int:
     from scoring_kit.publish import check_approver
 
     try:
-        check_approver(Path(args.root), args.user)
+        check_approver(Path(args.root), args.user, allow_owners=args.allow_owners)
     except PipelineError as e:
         print(f"Ошибка: {e}", file=sys.stderr)
         return 1
     print(f"{args.user}: публикация на боевой инстанс разрешена")
+    return 0
+
+
+def _cmd_check_changes(args) -> int:
+    from scoring_kit.guard import APPROVERS_FILE, check_changes, explain, parse_approvers
+
+    try:
+        problems = check_changes(Path(args.root), args.base, args.user)
+    except PipelineError as e:
+        print(f"Ошибка: {e}", file=sys.stderr)
+        return 1
+    if problems:
+        approvers_path = Path(args.root) / APPROVERS_FILE
+        listed = parse_approvers(approvers_path.read_text(encoding="utf-8")) if approvers_path.exists() else []
+        print(explain(problems, args.user, listed), file=sys.stderr)
+        return 1
+    print(f"{args.user}: изменения в этом merge request разрешены")
     return 0
 
 
@@ -273,7 +290,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check-approver", help="проверить, что пользователю разрешено публиковать на прод (approvers.txt)")
     p.add_argument("--user", required=True, help="логин; в GitLab CI это $GITLAB_USER_LOGIN")
     p.add_argument("--root", default=".")
+    p.add_argument("--allow-owners", action="store_true", help="разрешить и владельцам боевых процессов")
     p.set_defaults(func=_cmd_check_approver)
+
+    p = sub.add_parser("check-changes", help="проверить merge request: боевые процессы и удаления — только владелец или approvers.txt")
+    p.add_argument("--base", required=True, help="версия, с которой сравнивать; в CI это $CI_MERGE_REQUEST_DIFF_BASE_SHA")
+    p.add_argument("--user", required=True, help="логин; в GitLab CI это $GITLAB_USER_LOGIN")
+    p.add_argument("--root", default=".")
+    p.set_defaults(func=_cmd_check_changes)
 
     p = sub.add_parser("schema", help="JSON Schema для подсказок в редакторе")
     p.add_argument("-o", "--out", default="pipeline.schema.json")

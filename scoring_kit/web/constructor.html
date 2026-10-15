@@ -1186,7 +1186,7 @@ function trackStatus(client, cfg, tracking) {
     if (mr.state === "closed") return out("failed", "bad", "Merge request закрыт без слияния. Процесс не опубликован.");
     if (mr.state !== "merged") {
       if (pipeline && pipeline.status === "failed")
-        return out("failed", "bad", "Проверки не прошли: в конфиге ошибка. Откройте лог, поправьте форму и отправьте заново.", pipeLink, "лог проверок");
+        return out("failed", "bad", "Проверки не прошли. В логе написано почему: ошибка в конфиге (поправьте форму и отправьте заново) или изменение, которое может сделать только владелец процесса или участник из approvers.txt.", pipeLink, "лог проверок");
       if (pipeline && pipeline.status === "canceled") return out("failed", "bad", "Проверки отменены.", pipeLink, "лог проверок");
       if (!pipeline) return out("checks", "wait", "Конфиг в GitLab. Ждём запуска проверок.");
       if (mr.merge_when_pipeline_succeeds || mr.auto_merge_enabled || tracking.mergeRequested)

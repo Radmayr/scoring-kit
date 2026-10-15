@@ -98,15 +98,40 @@ def approvers(root: Path) -> list[str]:
     return [line for line in lines if line]
 
 
-def check_approver(root: Path, user: str) -> None:
+def prod_owners(root: Path) -> list[str]:
+    """Владельцы процессов, которые выкладываются на боевой инстанс (без тени и не черновики)."""
+    from scoring_kit.guard import owners_of
+
+    shadow = set(shadow_dirs(root))
+    found: list[str] = []
+    for d in pipeline_dirs(root):
+        if d.resolve() in shadow:
+            continue
+        cfg = yaml.safe_load((d / "pipeline.yaml").read_text(encoding="utf-8")) or {}
+        if cfg.get("draft"):
+            continue
+        found += [o for o in owners_of(cfg) if o not in found]
+    return found
+
+
+def check_approver(root: Path, user: str, allow_owners: bool = False) -> None:
+    """Право публиковать на прод: участник из approvers.txt или, с allow_owners, владелец боевого процесса.
+
+    Владельцу этого достаточно, потому что чужие боевые процессы в main может изменить только их владелец
+    или участник из approvers.txt (проверка `scoring check-changes` на merge request).
+    """
     allowed = approvers(root)
-    if not allowed:
+    if user and user in allowed:
+        return
+    owners = prod_owners(root) if allow_owners else []
+    if user and user in owners:
+        return
+    if not allowed and not owners:
         raise PipelineError(f"{APPROVERS_FILE}: файл пуст или отсутствует — некому разрешено публиковать на прод")
-    if user not in allowed:
-        raise PipelineError(
-            f"{user or '(логин не определён)'}: нет права публиковать на боевой инстанс. "
-            f"Разрешено: {', '.join(allowed)} ({APPROVERS_FILE})"
-        )
+    who = f"участники из {APPROVERS_FILE}: {', '.join(allowed) or '—'}"
+    if allow_owners:
+        who += f"; владельцы боевых процессов: {', '.join(owners) or '—'}"
+    raise PipelineError(f"{user or '(логин не определён)'}: нет права публиковать на боевой инстанс. Могут {who}")
 
 
 def _manual_files(root: Path, env: str) -> list[Path]:

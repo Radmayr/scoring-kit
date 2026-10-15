@@ -44,10 +44,10 @@ dlh:  wait_source → prepare_source (если query) → check_source → infer
 ## Установка
 
 ```bash
-pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.8.1"
+pip install "scoring-kit @ git+https://<gitlab>/<group>/scoring-kit.git@v0.9.0"
 ```
 
-Всегда закрепляйте версию (тег `@v0.8.1`): фреймворк меняется, и незакреплённая установка сломает
+Всегда закрепляйте версию (тег `@v0.9.0`): фреймворк меняется, и незакреплённая установка сломает
 чужие пайплайны при выходе новой версии.
 
 ## Конструктор: процесс без программирования
@@ -96,6 +96,24 @@ scoring constructor --presets presets.yaml --pipelines pipelines/*/ -o construct
 Перевод с теста на прод — это тот же процесс, отправленный с выбором «на боевой инстанс».
 
 Логика кнопок покрыта тестом на имитации GitLab API (`tests/gitlab_flow.js`).
+
+### Кто что может менять
+
+| Изменение | Кто может |
+|---|---|
+| Новый процесс, правка процесса в тени, выкладка на тест | любой участник проекта |
+| Правка или перевод в тень боевого процесса | его владелец (поле `owner`) или участник из `approvers.txt` |
+| Удаление любого процесса | его владелец или участник из `approvers.txt` |
+| Служебные файлы: `.gitlab-ci.yml`, `approvers.txt`, `environments.yaml`, `requirements.txt` | участник из `approvers.txt` |
+| Публикация на боевой инстанс | участник из `approvers.txt` или владелец боевого процесса |
+
+На merge request это проверяет `scoring check-changes`; владелец и список берутся из версии до
+изменения, поэтому вписать себя и сразу воспользоваться этим нельзя. Если проверка отказала,
+владелец или участник из списка нажимает в merge request «Run pipeline», и проверка проходит от его
+имени. Публикацию на прод проверяет `scoring check-approver --allow-owners`.
+
+Проверки ловят ошибки, а не злой умысел: человек с правом записи может поправить и сам файл CI.
+Гарантию дают защищённая ветка `main` в GitLab и право публикации на инстанс только у сервисной учётки.
 
 ## Процесс
 
@@ -392,7 +410,8 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 | `scoring new DIR [--recipe R] [--custom-predictor]` | заготовка процесса: single_model, multi_model, fit_apply, dlh |
 | `scoring validate DIR...` | проверка конфига и predictor.py (для CI) |
 | `scoring publish --env test\|prod [--dry-run] [--yes] [--force-local]` | собрать полный набор для инстанса и опубликовать; с компьютера — только из копии, совпадающей с GitLab |
-| `scoring check-approver --user LOGIN` | право публиковать на боевой инстанс (`approvers.txt`); вызывается в CI перед выкладкой на прод |
+| `scoring check-changes --base SHA --user LOGIN` | проверка merge request: боевые процессы и удаления — только владелец или `approvers.txt` |
+| `scoring check-approver --user LOGIN [--allow-owners]` | право публиковать на боевой инстанс (`approvers.txt`); вызывается в CI перед выкладкой на прод |
 | `scoring schema [-o pipeline.schema.json]` | схема для подсказок в редакторе |
 | `scoring render DIR... [-o build/dags] [--shadow]` | генерация DAG-файлов |
 | `scoring debug DIR --data F --model M [--limit N]` | локальный прогон |
@@ -437,7 +456,7 @@ scoring compare-sql pipelines/my_model      # SQL сверки по каждой
 **Перенос из GitHub в GitLab:** `git remote add gitlab <url> && git push gitlab main --tags`.
 
 **Доступ к установке** (что разрешено политикой): SSH-ключ
-(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.8.1`), deploy token с правом
+(`git+ssh://git@<gitlab>/<group>/scoring-kit.git@v0.9.0`), deploy token с правом
 `read_repository`, `CI_JOB_TOKEN` в CI или wheel во внутреннем pip-индексе
 (`pip wheel . --no-deps`, затем `pip install scoring-kit==0.4.0`).
 
